@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import ContainerBlock from '../components/ContainerBlock';
 import { SiteMeta } from '../data/SiteMeta';
 
@@ -17,14 +18,15 @@ export default function Posts({
 }) {
   return (<ContainerBlock metadata={meta}>    
           {allPostsData.map(({ id, date, title }) => (
-            <li className={utilStyles.listItem} key={id}>
+            <li className={.listItem} key={id}>
               <Link href={`/posts/${id}`}>{title}</Link>
               <br />
               <small className={utilStyles.lightText}>
                 <Date dateString={date} />
               </small>
             </li>
-          ))})   
+          ))}
+          </ContainerBlock>)   
 }
 
 export const getStaticProps: GetStaticProps = async () => {
