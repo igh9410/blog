@@ -3,7 +3,7 @@ import Link from 'next/link';
 
 const navItems = [
   ['Home', '/'],
-  ['Blog', '/blog'],
+  ['Posts', '/posts'],
   ['Experience', '/experience'],
   ['Projects', '/projects'],
   ['About', '/about'],
