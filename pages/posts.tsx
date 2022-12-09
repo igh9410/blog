@@ -25,21 +25,30 @@ export default function Posts({
       <br />
       <br />
       <div>
-        <h1 className="text-5xl text-center">Blog Posts</h1>
+        <h1 className="font-extrabold text-4xl text-teal-700 text-center">
+          Blog Posts
+        </h1>
+        <br />
+        <br />
+        <hr className="border-solid border-lime-500 ml-60 mr-60" />
+        <br />
         <br />
         <ul className="list-none list-inside">
           {allPostsData.map(({ id, date, title }) => (
-            <li className="list-item indent-8" key={id}>
-              <Link
-                href={`/posts/${id}`}
-                className="font-bold text-sky-500 text-center"
-              >
-                {title}
-              </Link>
-              <br />
-              <p className="font-light text-black text-jusitify">
-                <Date dateString={date} />
-              </p>
+            <li className="list-item" key={id}>
+              <div className="ml-60 mr-60">
+                <Link
+                  href={`/posts/${id}`}
+                  className="font-bold text-sky-500 text-center"
+                >
+                  {title}
+                </Link>
+                <br />
+                <p className="font-light text-black text-jusitify">
+                  <Date dateString={date} />
+                </p>
+                <br />
+              </div>
             </li>
           ))}
         </ul>
