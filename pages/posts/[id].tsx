@@ -1,8 +1,8 @@
-import { Container } from '@mui/material';
 import { getAllPostIds, getPostData } from '../../lib/posts';
-import Head from 'next/head';
 import Date from '../../components/Date';
 import { GetStaticProps, GetStaticPaths } from 'next';
+import { SiteMeta } from '../../data/SiteMeta';
+import ContainerBlock from '../../components/ContainerBlock';
 
 export default function Post({
   postData,
@@ -13,19 +13,25 @@ export default function Post({
     contentHtml: string;
   };
 }) {
+  const meta: SiteMeta = {
+    title: postData.title,
+    description: 'Blog Post',
+  };
   return (
-    <Container>
-      <Head>
-        <title>{postData.title}</title>
-      </Head>
+    <ContainerBlock metadata={meta}>
+      <br />
       <article>
-        <h1 className="text-2xl font-medium text-black">{postData.title}</h1>
-        <div className="text-xl font-light text-black">
+        <h1 className="text-2xl font-medium indent-24 text-sky-500">
+          {postData.title}
+        </h1>
+        <br />
+        <div className="text-xl font-light indent-24 text-black">
           <Date dateString={postData.date} />
         </div>
+        <br />
         <div dangerouslySetInnerHTML={{ __html: postData.contentHtml }} />
       </article>
-    </Container>
+    </ContainerBlock>
   );
 }
 
