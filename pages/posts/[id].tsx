@@ -21,15 +21,19 @@ export default function Post({
     <ContainerBlock metadata={meta}>
       <br />
       <article>
-        <h1 className="text-2xl font-medium indent-24 text-sky-500">
+        <h1 className="text-4xl font-bold text-center text-sky-500">
           {postData.title}
         </h1>
         <br />
-        <div className="text-xl font-light indent-24 text-black">
+        <div className="text-xl font-light text-center ml-auto mr-auto text-black">
           <Date dateString={postData.date} />
         </div>
+
         <br />
-        <div dangerouslySetInnerHTML={{ __html: postData.contentHtml }} />
+        <div
+          className="prose prose-stone text-justify ml-auto mr-auto"
+          dangerouslySetInnerHTML={{ __html: postData.contentHtml }}
+        />
       </article>
     </ContainerBlock>
   );
