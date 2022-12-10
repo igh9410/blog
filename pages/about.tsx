@@ -12,9 +12,12 @@ export default function About() {
       <ContainerBlock metadata={meta}>
         <div>
           <br />
-          <h1 className="text-5xl text-center">About Me</h1>
           <br />
-          <hr className="border-1 divide-x-8 border-blue-400 drop-shadow-xl" />
+          <h1 className="font-extrabold text-4xl text-teal-700 text-center">
+            About Me
+          </h1>
+          <br />
+          <hr className="border-solid border-lime-500 ml-60 mr-60 drop-shadow-2xl" />
           <br />
           <br />
           <div className="flex flex-col justify-center items-center">
@@ -29,13 +32,13 @@ export default function About() {
           <br />
           <br />
           <br />
-          <section className="md:container md:mx-auto">
+          <div className="md:container ml-60 mr-60 w-full">
             <p>
               Hello. I&#39;m Geonhyuk, call me as Geon (Gun).
               <br />I hold a B.S in Computer Science obtained from Purdue
               University Northwest in 2021.
             </p>
-          </section>
+          </div>
         </div>
       </ContainerBlock>
     </>

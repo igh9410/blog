@@ -30,7 +30,7 @@ export default function Posts({
         </h1>
         <br />
         <br />
-        <hr className="border-solid border-lime-500 ml-60 mr-60" />
+        <hr className="border-solid border-lime-500 ml-60 mr-60 drop-shadow-2xl" />
         <br />
         <br />
         <ul className="list-none list-inside">
@@ -39,7 +39,7 @@ export default function Posts({
               <div className="ml-60 mr-60">
                 <Link
                   href={`/posts/${id}`}
-                  className="font-bold text-sky-500 text-center"
+                  className="font-bold text-blue-700 text-center"
                 >
                   {title}
                 </Link>

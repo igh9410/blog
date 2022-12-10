@@ -20,8 +20,8 @@ export default function Post({
   return (
     <ContainerBlock metadata={meta}>
       <br />
-      <article>
-        <h1 className="text-4xl font-bold text-center text-sky-500">
+      <article className="prose-slate w-full">
+        <h1 className="text-4xl font-bold text-center text-blue-700">
           {postData.title}
         </h1>
         <br />
@@ -30,8 +30,10 @@ export default function Post({
         </div>
 
         <br />
-        <div className="prose prose-stone text-justify ml-auto mr-auto">
-          <div dangerouslySetInnerHTML={{ __html: postData.contentHtml }} />
+        <div className="md:container md:mx-auto w-full">
+          <div className="prose prose-stone text-justify ml-auto mr-auto">
+            <div dangerouslySetInnerHTML={{ __html: postData.contentHtml }} />
+          </div>
         </div>
       </article>
     </ContainerBlock>
