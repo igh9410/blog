@@ -30,10 +30,9 @@ export default function Post({
         </div>
 
         <br />
-        <div
-          className="prose prose-stone text-justify ml-auto mr-auto"
-          dangerouslySetInnerHTML={{ __html: postData.contentHtml }}
-        />
+        <div className="prose prose-stone text-justify ml-auto mr-auto">
+          <div dangerouslySetInnerHTML={{ __html: postData.contentHtml }} />
+        </div>
       </article>
     </ContainerBlock>
   );
