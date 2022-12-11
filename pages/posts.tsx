@@ -24,7 +24,7 @@ export default function Posts({
     <ContainerBlock metadata={meta}>
       <br />
       <br />
-      <div>
+      <div className="w-full">
         <h1 className="font-extrabold text-4xl text-teal-700 text-center">
           Blog Posts
         </h1>
@@ -35,20 +35,23 @@ export default function Posts({
         <br />
         <ul className="list-none list-inside">
           {allPostsData.map(({ id, date, title }) => (
-            <li className="list-item" key={id}>
-              <div className="ml-60 mr-60">
-                <Link
-                  href={`/posts/${id}`}
-                  className="font-bold text-blue-700 text-center"
-                >
-                  {title}
-                </Link>
-                <br />
-                <p className="font-light text-black text-jusitify">
-                  <Date dateString={date} />
-                </p>
-                <br />
-              </div>
+            <li className="list-item py-4" key={id}>
+              <article className="space-y-2 xl:grid xl:grid-cols-4 xl:items-baseline xl:space-y-0">
+                <div className="space-y-3 xl:col-span-3">
+                  <h3 className="text-2xl font-bold leading-8 tracking-tight">
+                    <Link
+                      href={`/posts/${id}`}
+                      className="font-bold text-blue-700 text-center"
+                    >
+                      {title}
+                    </Link>
+                  </h3>
+                  <p className="prose max-w-none text-black text-jusitify">
+                    <Date dateString={date} />
+                  </p>
+                  <br />
+                </div>
+              </article>
             </li>
           ))}
         </ul>

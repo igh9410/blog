@@ -32,18 +32,16 @@ export default function About() {
           <br />
           <br />
           <br />
-          <section className="md:container md:mx-auto">
-            <div className="md:container ml-60 mr-60 w-full">
-              <p>
-                Hello. I&#39;m Geonhyuk, call me as Geon (Gun).
-                <br />I hold a B.S in Computer Science obtained from Purdue
-                University Northwest in 2021. <br />
-                I&#39;m currently open to work. <br />
-                I&#39; most comfortable with Java and Spring Boot framework.{' '}
-                <br />
-              </p>
-            </div>
-          </section>
+          <article className="prose-slate w-full">
+            <p>
+              Hello. I&#39;m Geonhyuk, call me as Geon (Gun).
+              <br />I hold a B.S in Computer Science obtained from Purdue
+              University Northwest in 2021. <br />
+              I&#39;m currently open to work. <br />
+              I&#39; most comfortable with Java and Spring Boot framework.{' '}
+              <br />
+            </p>
+          </article>
         </div>
       </ContainerBlock>
     </>
