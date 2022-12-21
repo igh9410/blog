@@ -14,9 +14,9 @@ Below is my build.gradle file.
 
 I made the WebClient instance to be initialized in the Service class.
 
-![WebClientService](../images/markdown/WebclientService.png)
+![WebClientService](../images/markdown/WebClientService.png)
 
-![WebClientServiceImpl](../images/markdown/WebclientServiceImpl.png)
+![WebClientServiceImpl](../images/markdown/WebClientServiceImpl.png)
 
 I also implemented a Java file named ScheduledTasks.java to send HTTP GET requests to the Naver API server. The code runs sequentially but I think its performance could be improved by sending HTTP requests in parallel-manner. I will refactor the code to make use of parallel computing later.
 
