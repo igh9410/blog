@@ -1,0 +1,29 @@
+---
+title: 'Build Graphics Card Comparison Service - Development Log:2'
+date: '2022-12-20'
+---
+
+Let's start with the backend development. Until now, I have implemented a spring boot app which sends http requests to the external APi, in this case, Naver's API.
+Naver is the biggest tech company of South Korea and it provides reasonable amount of API usage per day, so my app will send http requests to its API, retrieving the graphics card information from them and save to the local MongoDB database.
+
+Since RestTemplate of Spring Web is deprecated, I used WebCleint class from Spring Webflux. The initial project was based on Spring MVC, but I think the performance of WebCleint requests could be improved by migrating from Spring MVC to WebFlux since WebClient is based on Spring Webflux and needs to be run on Spring Webflux and Netty server to take full advantages of its asyncronous features.
+
+Below is my build.gradle file.
+
+![build.gradle](../images/markdown/build-gradle.png)
+
+I made the WebClient instance to be initialized in the Service class.
+
+![WebClientService](../images/markdown/WebclientService.png)
+
+![WebClientServiceImpl](../images/markdown/WebclientServiceImpl.png)
+
+I also implemented a Java file named ScheduledTasks.java to send HTTP GET requests to the Naver API server. The code runs sequentially but I think its performance could be improved by sending HTTP requests in parallel-manner. I will refactor the code to make use of parallel computing later.
+
+![ScheduledTasks](../images/markdown/ScheduledTaks.png)
+
+The fetched Http response from Naver API server now converted to JSON, saved directly to my local MongoDB database.
+
+![MongoDB](../images/markdown/MongoDB.png)
+
+Those are the progress I've made so far. I will start implementing the user-service, integrating OAuth to support social login.
