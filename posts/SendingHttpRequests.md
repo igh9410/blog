@@ -23,7 +23,7 @@ I made the WebClient instance to be initialized in the Service class.
 
 I also implemented a Java file named ScheduledTasks.java to send HTTP GET requests to the Naver API server. The code runs sequentially but I think its performance could be improved by sending HTTP requests in parallel-manner. I will refactor the code to make use of parallel computing later.
 
-![ScheduledTasks](../images/markdown/ScheduledTaks.png)
+![ScheduledTasks](../images/markdown/ScheduledTasks.png)
 
 The fetched Http response from Naver API server now converted to JSON, saved directly to my local MongoDB database.
 

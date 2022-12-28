@@ -30,7 +30,7 @@ Below are the service layer implementations.
 
 Implementation of the Controller layer
 
-![SubscriptionServiceController](../images/markdown/SubscriptionServiceController.png)
+![SubscriptionServiceController](../images/markdown/SubscriptionController.png)
 
 The current API endpoint URLs for the subscription service are
 
