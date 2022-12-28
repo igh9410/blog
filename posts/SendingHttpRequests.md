@@ -10,7 +10,10 @@ Since RestTemplate of Spring Web is deprecated, I used WebCleint class from Spri
 
 Below is my build.gradle file.
 
-![build.gradle](../images/markdown/build-gradle.png)
+## ![build.gradle](../images/markdown/build-gradle.png)
+
+<img src="../images/markdown/build-gradle.png" alt="build.gradle" width=100%
+max-height: 100%;/>
 
 I made the WebClient instance to be initialized in the Service class.
 
