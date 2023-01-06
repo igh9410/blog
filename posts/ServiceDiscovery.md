@@ -1,6 +1,6 @@
 ---
 title: 'Build Graphics Card Comparison Service - Development Log:4'
-date: '2022-01-06'
+date: '2023-01-06'
 ---
 
 So far, I've implemented two microservices for GetMyGraphicsCard project. Now it's time to implement a service discovery and API gateway.
