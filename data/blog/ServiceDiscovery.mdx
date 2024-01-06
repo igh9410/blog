@@ -1,0 +1,48 @@
+---
+title: 'Build Graphics Card Comparison Service - Development Log:4'
+date: '2023-01-06'
+tags: ['next js', 'math', 'ols']
+draft: false
+summary: 'How to derive the OLS Estimator with matrix notation and a tour of math typesetting using markdown with the help of KaTeX.'
+---
+
+So far, I've implemented two microservices for GetMyGraphicsCard project. Now it's time to implement a service discovery and API gateway.
+
+For Spring microservices, it seems the most common way to implement a service discovery is using Netflix Eureka, so I will implement my service discovery using that dependency.
+
+But first, what is service discovery? Clients of a service need to know the location of a service instance as the hostname or IP address. Service discovery lets clients know the available instances of a service and is critical to microservice for two key reasons:
+
+Horizontal scaling or scale out - by adjusting application architecture, for example, adding more instances of a service inside a cloud service and more containers.  
+Resiliency - This pattern refers to the ability to absorb the impact of problems within an architecture or service without affecting the business.
+
+Service discovery abstracts the physical location of the service, thus the service consumers don't know the exact location of the service. And due to abstraction, new service instances can be added or removed from the pool of available services without affecting the service consumers.
+
+By implementing resiliency in microservices, when an instance of the service becomes unhealthy or unavailable, the service discovery removes the instance, minimizing the damage caused by a down service.
+
+Below is the service discovery app.
+
+![ServiceDiscovery1](../static/images/markdown/EurekaServer.png)
+
+![ServiceDiscovery2](../static/images/markdown/EurekaServer2.png)
+
+And registers the product-service and subscription-service app to the Eureka server by adding @EnablingDiscoveryClient annotations on the main application program.
+
+![EurekaClient1](../static/images/markdown/EurekaClient1.png)
+
+![EurekaClient2](../static/images/markdown/EurekaClient2.png)
+
+To ensure resiliency in my projects, I added Resilience4j Circuitbreaker dependency to the subscription service. So far, only the subscription service has the CircuitBreaker implementation because the product service, which sends HTTP GET requests to the external API (naver.com, in this case) and provides the graphics card information to clients, is only running one instance. But the subscription service, which requests the product information to the product service, is dependent on the product service when the user wants to add an item to their subscription. So the user should be prevented from sending HTTP requests to the product service when the product service is shut down or unstable.
+
+Below is the circuit breaker annotation added to the method in the subscription service.
+
+![CircuitBreaker1](../static/images/markdown/CircuitBreaker1.png)
+
+And below is the fallback method implementation of the method annotated with @CircuitBreaker. Users should get the error message when they try to add items to their subscription and the product service instance is not running.
+
+![CircuitBreaker2](../static/images/markdown/CircuitBreaker2.png)
+
+And here is the result of the Postman test. The subscription service is running on port 5001, but the product service is shut down.
+
+![CircuitBreakerResult](../static/images/markdown/CircuitBreakerResult.png)
+
+I've implemented many other features other than the service discovery, including Spring Cloud config server, API gateway server, and frontend client. Blog posts regarding those features and an in-depth understanding of microservices will be published later.

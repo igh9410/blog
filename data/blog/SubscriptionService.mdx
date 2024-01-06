@@ -1,0 +1,49 @@
+---
+title: 'Build Graphics Card Comparison Service - Development Log:3'
+date: '2022-12-27'
+tags: ['next js', 'math', 'ols']
+draft: false
+summary: 'How to derive the OLS Estimator with matrix notation and a tour of math typesetting using markdown with the help of KaTeX.'
+---
+
+I've implemented a Spring Boot app that sends HTTP GET requests to the Naver API server and retrieves product info, saving it to MongoDB collections. It's time to implement a user-subscription service that enables the user to subscribe to the products.
+
+First, I initialized a Spring Boot project with the following dependencies, Spring Web, Spring WebFlux, Spring Starter Data JPA, and MySQL connector driver. Since the subscription service will send HTTP requests to the product service via WebClient, Spring WebFlux dependency needs to be included. And since the subscription service would use MySQL for databases, the project also includes JPA and MySQL connector dependencies.
+
+Below is what the gradle.build file for subscription-service looks.
+
+![SubscriptionServiceBuild](../images/markdown/SubscriptionServiceBuild.png)
+
+Below are the JPA entities.
+
+![SubscriptionEntity](../images/markdown/SubscriptionEntity.png)
+
+There was a problem with query optimization. When marked only @OneToMany annotations to the list of subscription items in the Subscription entity, Hibernate automatically built an extra join table named "subscription_subscription_items", which impairs the performance of the queries. To fix this issue, I marked the subscription field in the SubscriptionItem entity with the @ManyToOne annotation. And I changed the fetch type to LAZY since the default fetch type EAGER loads all the associated data at once, making extra join tables, which leads to performance issues.  
+Source: [Eager Fectching](https://vladmihalcea.com/eager-fetching-is-a-code-smell/), [@OneToMany Practices](https://vladmihalcea.com/the-best-way-to-map-a-onetomany-association-with-jpa-and-hibernate/)
+
+To send an HTTP request to the running product service which runs on port 5000, I configured the webClient instance as below.
+![WebClientConfig](../images/markdown/WebClientConfig.png).
+
+Below are the service layer implementations.
+
+![SubscriptionService](../images/markdown/SubscriptionService.png)
+
+![SubscriptionServiceImpl](../images/markdown/SubscriptionServiceImpl.png)\
+
+Implementation of the Controller layer
+
+![SubscriptionServiceController](../images/markdown/SubscriptionController.png)
+
+The current API endpoint URLs for the subscription service are
+
+GET
+http://localhost:5001/api/subscriptions/{id}
+
+-> Retrieves all the subscribed items belonging to each subscription.
+
+POST
+http://localhost:5001/api/subscriptions/{id}
+
+-> Add an item to the subscription.
+
+Those are not defined well, and I think I might change the endpoint structures later, perhaps while implementing security for my microservices.
