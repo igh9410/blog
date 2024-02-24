@@ -1,0 +1,18 @@
+---
+title: 'How to convert Golang pgtype.UUID to string'
+date: '2024-02-24'
+lastmod: '2024-02-24'
+tags: ['Go', 'Postgres']
+draft: false
+summary: 'Convert Golang pgtype.UUID to string easy way'
+---
+
+```go
+func UUIDToString(t pgtype.UUID) string {
+	if !t.Valid {
+		return ""
+	}
+	src := t.Bytes
+	return fmt.Sprintf("%x-%x-%x-%x-%x", src[0:4], src[4:6], src[6:8], src[8:10], src[10:16])
+}
+```
