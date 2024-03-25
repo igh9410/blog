@@ -1,0 +1,80 @@
+---
+title: 'Understanding Database Indexing: A Deep Dive into MySQL and PostgreSQL - part 1'
+date: '2024-03-25'
+lastmod: '2024-03-25'
+tags: ['MySQL', 'Postgres', 'SQL', 'Database']
+draft: false
+summary: 'Summary of database indexing in MySQL and Postgres'
+---
+
+# Understanding Database Indexing: A Deep Dive into MySQL and PostgreSQL
+
+Database indexing is a fundamental aspect of database management, offering a way to speed up the retrieval of records from a database table. Both MySQL and PostgreSQL, two of the most popular relational database management systems, implement indexing to enhance performance and efficiency.
+
+## Primary Key Indexing Based on B Trees
+
+B-Tree is common data structure used for indexing in RDBMS. It is a self-balancing tree data structure that maintains sorted data and allows searches, sequential access, insertions, and deletions in logarithmic time. In the context of database indexing, B-Tree is used to create primary key indexes in MySQL and PostgreSQL.
+
+<br />
+B-Tree divides the data into blocks or pages, with each block containing a range of values and the size
+is usually 4KB. The root of the tree is the first block, and the leaf nodes are the last blocks. The
+internal nodes of the tree contain pointers to the child nodes, allowing for efficient traversal of the
+tree. This structure enables quick searches for specific values in O(log n) time complexity. The leaf
+nodes of the B-Tree contain the actual data values along with pointers to the corresponding rows in the
+database table.
+
+## Secondary Indexing in MySQL and PostgreSQL
+
+In addition to primary key indexing, MySQL and PostgreSQL support secondary indexing to improve query performance on non-primary key columns.
+The essential difference between primary and secondary indexes is that primary indexes are unique and are used to enforce the uniqueness of the primary key column, while secondary indexes can be created on any column to speed up queries.
+This can be optimized by adding row identifiers to the secondary index, which allows the database engine to quickly locate the corresponding rows in the table.
+
+<br />
+In database index, key is the column or set of columns that are indexed, and the value is the actual
+data value stored in the index or the pointer to the row in the table. The key-value pair is used to
+quickly locate the desired rows based on the search criteria. The latter is particularly useful for columns
+that are frequently queried but are not unique, such as customer names, product categories, or order
+dates. And the location where the index is stored is called heap file, which is the actual data file
+that contains the table rows without sorted order. Heap file referencing is effective when not chaning
+the key, but updating the value. In this case, the index does not need to be updated, and the database
+engine can quickly locate the row based on the key and update the value. But if the new value requires
+more space than the old value, the database engine may need to move the row to a different location in
+the heap file to accommodate the larger value.
+
+## Clustered Indexing in MySQL and PostgreSQL
+
+Since moving from index to heap file is expensive, clustered index is used to store the actual data in the leaf nodes of the B-Tree. This allows the database engine to retrieve the data directly from the index without the need to access the heap file. In MySQL, the primary key index is clustered by default, meaning that the primary key column is used to order the rows in the table.
+But in PostgreSQL, the primary key index is not clustered by default, but you can create a clustered index on any column using the CLUSTER command.
+
+## Multi-Column Indexing in MySQL and PostgreSQL
+
+Single-column indexes are useful for queries that filter on a single column. But single-column indexes may not be sufficient for queries that filter on multiple columns. In such cases, multi-column indexes can be used to speed up the query performance.
+A multi-column index is created on multiple columns, and the database engine uses the combined values of these columns to locate the desired rows. The order of the columns in the index is essential, as it determines the index's effectiveness for different query conditions.
+
+<br />
+The most common type of multi-column index is the concatenated index, where the values of the columns
+are concatenated together to form a single key. This allows the database engine to quickly locate the
+rows based on the combined values of the columns. The concatenated index is particularly useful for queries
+that filter on multiple columns simultaneously, such as WHERE clause with multiple conditions. This is
+similar to phone book, where the last name is the first key and the first name is the second key. And
+since the order is sorted, this index can be used to quickly locate the people with certain last name
+or certain combination of first and last name. But if you want to search by first name only, this index
+is not effective. <br /> Multi-dimensional index is another type of multi-column index, which is used
+for spatial data types such as points, lines, and polygons. This type of index is used to speed up the
+search for geometric objects based on their spatial properties, such as distance, area, or intersection.
+For example, let's assume that restuarnants seaching website has a database table with columns for latitude
+and longitude of each restaurant. By creating a multi-dimensional index on these columns, the database
+engine can quickly locate the restaurants within a certain radius of a given location.
+
+Example)
+
+```
+SELECT * FROM restuarnants
+WHERE latitude > 37.5 AND latitude < 38.0
+AND longitude > -122.0 AND longitude < -121.5;
+```
+
+Traditional index is not effective for this query, because it can only search on one column at a time. One way to index this query is converting the latitude and longitude to a single key, which is called concatenated index.
+But this is not effective because the latitude and longitude are not related.
+More general and effective way is to use specialized spatial index, which is multi-dimensional index like R-Tree. This index is used to search on multiple columns at the same time, and it is particularly useful for spatial data types.
+For example, PostGIS is an extension to PostgreSQL that provides support for spatial data types and operations, including spatial indexing using R-Tree.
