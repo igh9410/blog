@@ -12,21 +12,21 @@ summary: 'The migration of chat application server to Kubernetes cluster using T
 In this blog post, we will discuss how to enhance the architecture of a chat application
 by migrating the server to a Kubernetes cluster using Terraform.
 
-## SS Table (Sorted String Table)
+## Previous Architecture
 
-SS-Table is a data structure used in NoSQL databases such as MongoDB and Cassandra to store key-value pairs in sorted order. It is a disk-based data structure that allows for efficient range queries and sorting operations.
-While hash indexing does not maintain the sorted order of the keys and saves all the data including old data, SS-Table stores the data in sorted order and only saves the latest version of each key. <br/>
-This allows for quick lookups and range queries, as the database engine can quickly locate the desired keys based on their position in the SS-Table.
-Segmented storage doesn't have fixed size while B-Tree has fixed size (4KB), and it is more efficient for range queries and sorting operations. <br/>
+Blabber-Hive is a chat application that allows users to communicate with each other in real time.
+It's a simple chat application in which users can create chat rooms, join chat rooms,
+and send messages to each other.
+Frontend is SPA (Single-Page Application) built with React TypeScript, bundled with Vite,
+and hosted on Cloudflare pages.
+The backend is built with the Golang Gin framework, dockerized,
+and hosted on Fly.io. And I use Supabase only for authentication and authorization.
+The database is PostgreSQL, hosted on Fly.io as well. There's a Redis server for caching,
+and Kafka cluster for batch-inserting chat messages to Postgres.
+The overall architecture is shown below:
 
-## LSM Tree (Log-Structured Merge Tree)
+![Blabber-Hive Architecture](../static/images/markdown/blabber-hive-prev.png)
 
-LSM Tree is a data structure used in NoSQL databases such as Cassandra to optimize write performance and reduce disk I/O. It is a disk-based data structure that combines the benefits of both B-Tree and SS-Table.
-SS Table has limitations that if the key doesn't exist in the SS Table, it needs to check the memtable and other SS Tables (Older segmentations)<br/>
-To optimize this kind of approach, database engines use Bloom Filter to check if the key exists in the SS Table or not.<br/>
-There are many different strategies to merge the SS Tables, but most widely used are size-tiered compaction, and leveled compaction<br/>
-Size-tiered compaction merges SS Tables based on the size of the tables, which is merging new SS Tables with the old SS Tables.<br/>
-Leveled compaction merges SS Tables based on the level of the tables. It divides the key range into smaller SS-Tables and move older data to independent levels. And as long as
-the data is sorted, it can execute range query more efficiently.<br/>
-LSM Tree's basic idea is to merge SS Tables in the background to reduce the number of disk I/O operations and improve read performance.<br/>
-LSM Tree is optimized for write-heavy workloads, as it allows for efficient write operations by buffering data in memory before flushing it to disk in a sequential manner.<br/>
+<br />
+
+<br />
