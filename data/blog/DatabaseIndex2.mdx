@@ -1,0 +1,35 @@
+---
+title: 'Understanding Database Indexing: A Deep Dive into NoSQL - Part 2'
+date: '2024-04-01'
+lastmod: '2024-04-01'
+tags: ['SQL', 'Database', 'Index']
+draft: false
+summary: 'Summary of database indexing in NoSQL databases such as MongoDB and Cassandra. Discusses the differences between NoSQL and SQL indexing, and how indexing is implemented in MongoDB and Cassandra.'
+---
+
+# Hash Indexing, SS Table, LSM Tree
+
+Hash indexing is a common data structure used for indexing in NoSQL databases such as MongoDB and Cassandra. It is a key-value store that uses a hash function to map keys to values, allowing for quick lookups in constant time.<br/>
+Hash indexing is particularly useful for queries that filter on a single key, as it provides fast access to the corresponding value.<br/>
+Key difference between hash indexing and B-Tree indexing is that hash indexing does not maintain the sorted order of the keys, which can be a limitation for range queries or sorting operations.<br/>
+Hash table has limitations that it all saves the data in-memory, leading to storage limitation when there are too many keys. This leads to random I/O, expensive disk expansion costs and needs additional logic to handle hash collisions.<br/>
+To enhance the performance of hash indexing, MongoDB and Cassandra use additional data structures such as SS-Tables and LSM-Trees.
+
+## SS Table (Sorted String Table)
+
+SS-Table is a data structure used in NoSQL databases such as MongoDB and Cassandra to store key-value pairs in sorted order. It is a disk-based data structure that allows for efficient range queries and sorting operations.
+While hash indexing does not maintain the sorted order of the keys and saves all the data including old data, SS-Table stores the data in sorted order and only saves the latest version of each key. <br/>
+This allows for quick lookups and range queries, as the database engine can quickly locate the desired keys based on their position in the SS-Table.
+Segmented storage doesn't have fixed size while B-Tree has fixed size (4KB), and it is more efficient for range queries and sorting operations. <br/>
+
+## LSM Tree (Log-Structured Merge Tree)
+
+LSM Tree is a data structure used in NoSQL databases such as Cassandra to optimize write performance and reduce disk I/O. It is a disk-based data structure that combines the benefits of both B-Tree and SS-Table.
+SS Table has limitations that if the key doesn't exist in the SS Table, it needs to check the memtable and other SS Tables (Older segmentations)<br/>
+To optimize this kind of approach, database engines use Bloom Filter to check if the key exists in the SS Table or not.<br/>
+There are many different strategies to merge the SS Tables, but most widely used are size-tiered compaction, and leveled compaction<br/>
+Size-tiered compaction merges SS Tables based on the size of the tables, which is merging new SS Tables with the old SS Tables.<br/>
+Leveled compaction merges SS Tables based on the level of the tables. It divides the key range into smaller SS-Tables and move older data to independent levels. And as long as
+the data is sorted, it can execute range query more efficiently.<br/>
+LSM Tree's basic idea is to merge SS Tables in the background to reduce the number of disk I/O operations and improve read performance.<br/>
+LSM Tree is optimized for write-heavy workloads, as it allows for efficient write operations by buffering data in memory before flushing it to disk in a sequential manner.<br/>

@@ -1,0 +1,44 @@
+---
+title: 'Introduction to gRPC'
+date: '2024-04-18'
+lastmod: '2024-04-18'
+tags: ['MySQL', 'Postgres', 'SQL', 'Database']
+draft: false
+summary: 'An introduction to gRPC and protocol buffers. Discusses the benefits of gRPC over REST, and how to implement a simple gRPC service in Go.'
+---
+
+# Introduction to gRPC
+
+In gRPC, a client application can directly call methods on a server application on a different machine as if it were a local object, making it easier to create distributed applications and services.  
+gRPC uses HTTP/2 for transport, Protocol Buffers as the interface description language, and provides features such as authentication, load balancing, and bidirectional streaming.  
+gRPC is based on the idea of defining a service, specifying the methods that can be called remotely with their parameters and return types. On the server side,
+the server implements this interface and runs a gRPC server to handle client calls. On the client side, the client has a stub that provides the same methods as the server.  
+gRPC clients and servers can be implemented in multiple languages, making it easy to create interoperable services across different platforms.
+For example, a client written in Go can call a server written in Java, and vice versa.
+
+## Protocol Buffers
+
+By default, gRPC uses Protocol Buffers as the interface description language. Protocol Buffers is a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
+
+The first step to using Protocol Buffers is to define the structure of the data you want to serialize in a `.proto` file.
+For example, the following `.proto` file defines a simple message with a single field:
+
+```protobuf
+message Person {
+  string name = 1;
+  int32 id = 2;
+  bool has_ponycopter = 3;
+}
+```
+
+Starting from a service definition in a .proto file, gRPC provides protocol buffer compiler plugins that generate client- and server-side code. gRPC users typically call these APIs on the client side and implement the corresponding API on the server side.
+
+On the server side, the server implements the methods declared by the service and runs a gRPC server to handle client calls. The gRPC infrastructure decodes incoming requests, executes service methods, and encodes service responses.  
+On the client side, the client has a stub that provides the same methods as the server. The client can call these methods directly, as if they were local methods.
+So both client and server define a service, specifying the methods that can be called remotely with their parameters and return types.
+
+protoc --go_out=. --go_opt=paths=source_relative \
+ --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+ helloworld/helloworld.proto
+
+## Implementing a simple gRPC service in Go

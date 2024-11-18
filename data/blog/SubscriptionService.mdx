@@ -12,27 +12,27 @@ First, I initialized a Spring Boot project with the following dependencies, Spri
 
 Below is what the gradle.build file for subscription-service looks.
 
-![SubscriptionServiceBuild](../images/markdown/SubscriptionServiceBuild.png)
+![SubscriptionServiceBuild](../static/images/markdown/SubscriptionServiceBuild.png)
 
 Below are the JPA entities.
 
-![SubscriptionEntity](../images/markdown/SubscriptionEntity.png)
+![SubscriptionEntity](../static/images/markdown/SubscriptionEntity.png)
 
 There was a problem with query optimization. When marked only @OneToMany annotations to the list of subscription items in the Subscription entity, Hibernate automatically built an extra join table named "subscription_subscription_items", which impairs the performance of the queries. To fix this issue, I marked the subscription field in the SubscriptionItem entity with the @ManyToOne annotation. And I changed the fetch type to LAZY since the default fetch type EAGER loads all the associated data at once, making extra join tables, which leads to performance issues.  
 Source: [Eager Fectching](https://vladmihalcea.com/eager-fetching-is-a-code-smell/), [@OneToMany Practices](https://vladmihalcea.com/the-best-way-to-map-a-onetomany-association-with-jpa-and-hibernate/)
 
 To send an HTTP request to the running product service which runs on port 5000, I configured the webClient instance as below.
-![WebClientConfig](../images/markdown/WebClientConfig.png).
+![WebClientConfig](../static/images/markdown/WebClientConfig.png).
 
 Below are the service layer implementations.
 
-![SubscriptionService](../images/markdown/SubscriptionService.png)
+![SubscriptionService](../static/images/markdown/SubscriptionService.png)
 
-![SubscriptionServiceImpl](../images/markdown/SubscriptionServiceImpl.png)\
+![SubscriptionServiceImpl](../static/images/markdown/SubscriptionServiceImpl.png)\
 
 Implementation of the Controller layer
 
-![SubscriptionServiceController](../images/markdown/SubscriptionController.png)
+![SubscriptionServiceController](../static/images/markdown/SubscriptionController.png)
 
 The current API endpoint URLs for the subscription service are
 
