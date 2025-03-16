@@ -77,7 +77,7 @@ When creating VPC endpoints in a shared VPC that will be accessed from peered VP
 - **Disable Default Private Hosted Zones**: When creating VPC endpoints, you must set not to use default private hostzone. The default AWS-managed private hosted zones only work within the VPC where the endpoint exists and won't function across VPC peering connections.
 - **Create Custom Private Hosted Zones**: For each AWS service you need to access (e.g, CloudWatch Logs), create a Route53 private hosted zone with the service's domain name (e.g. logs.AWS-REGION-NAME.amazonaws.com).
 - **Configure A Records**: Within each private hosted zone, create alias A records pointing to the corresponding VPC endpoint's DNS entry.
-- **Associate with Peered VPCs**: The private hosted zones must be associated with each peered VPC that needs to access the endpoints, not just with the central VPC where the endpoints reside.
+- **Associate with Peered VPCs**: The private hosted zones must be associated with each peered VPC that needs to access the endpoints, not the central VPC where the endpoints reside.
 - **Verify DNS Resolution**: After configuration, verify that resources in the peered VPCs can properly resolve the AWS service endpoints to the private IP addresses of the VPC endpoints in the shared VPC.
 
 ### Conclusion
