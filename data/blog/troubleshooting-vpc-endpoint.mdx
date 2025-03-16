@@ -1,0 +1,86 @@
+---
+title: 'Troubleshooting AWS VPC Endpoints in a Shared VPC with VPC Peering'
+date: '2025-03-16'
+lastmod: '2025-03-16'
+tags: ['AWS', 'VPC', 'DevOps']
+draft: false
+summary: 'Troubleshooting AWS VPC Endpoints in a Shared VPC with VPC Peering'
+---
+
+# Troubleshooting AWS VPC Endpoints in Shared VPC with VPC Peering
+
+In this blog post, I will share my approach to troubleshooting AWS VPC Endpoints in a Shared VPC with VPC Peering.
+
+## Introduction
+
+When working with AWS resources in private subnets such as EC2 instances, accessing AWS services like CloudWatch Logs presents an architectural challenge.  
+There are two primary approaches to enable this connectivity, each with different implications for security, performance, and cost.
+
+### Option 1: NAT Gateway
+
+A common and straightforward approach is to deploy a NAT Gateway in your VPC, enabling resources in private subnets to access AWS services over the public internet.  
+While this works well, it introduces:
+
+### Option 2: VPC Endpoints with AWS PrivateLink
+
+VPC endpoints are virtual devices that allow you to privately connect your VPC to supported AWS services without requiring an internet gateway or NAT device. They act as entry points within your VPC that AWS services can use to receive requests.  
+VPC endpoints have several benefits compared to using NAT Gateway to access AWS services including:
+
+- Traffic remains entirely within the AWS network
+- Data transfer costs are approximately 4.5 times cheaper than the NAT Gateway (\$0.01 per hour / $0.01 per GB)
+- Enhanced security as traffic never traverses the public internet
+- Reduced network latency when accessing AWS services
+
+## Centralized VPC Endpoints in Multi-VPC Architectures
+
+When managing resources across multiple VPCs, you face additional design considerations. Creating VPC endpoints in each individual VPC leads to:
+
+- Increased management overhead
+- Higher costs from running multiple endpoint services
+- Greater complexity for monitoring and troubleshooting
+
+To address these challenges, AWS suggests creating a shared VPC architecture where:
+
+- VPC endpoints are deployed in a single shared VPC [as suggested by AWS](https://aws.amazon.com/blogs/networking-and-content-delivery/centralize-access-using-vpc-interface-endpoints/)
+- Resources in other VPCs can access these endpoints via VPC peering or Transit Gateway
+
+### VPC Peering vs Transit Gateway
+
+For connecting multiple VPCs to a shared VPC with endpoints, there are two primary options:
+
+#### VPC Peering
+
+- More cost-effective when connecting a small to moderate number of VPCs
+- No additional data transfer charges between peered VPCs (when resources are in the same Availability Zone)
+- Simple to implement and manage for straightforward architectures
+- Direct network path between peer VPCs
+
+#### Transit Gateway
+
+- Better suited for complex architectures with many VPCs
+- Simplifies network topology for large-scale deployments
+- Incurs additional costs for both the gateway itself and data transfer
+- Provides more advanced routing capabilities
+
+### VPC Endpoint Implementation Considerations and Troubleshooting
+
+When implementing VPC endpoints in a shared VPC accessed via VPC peering, remember these key configuration requirements:
+
+- Security groups attached to VPC endpoints must allow inbound HTTPS traffic (port 443) from all peered VPC CIDR blocks
+- Route tables in each peered VPC need entries for the shared VPC's CIDR block
+- DNS settings may require additional configuration for proper endpoint resolution (see below)
+
+#### Critical DNS Configuration for VPC Endpoints in Shared VPC Architecture
+
+When creating VPC endpoints in a shared VPC that will be accessed from peered VPCs, the DNS configuration is critical and often misunderstood.
+
+- **Disable Default Private Hosted Zones**: When creating VPC endpoints, you must set not to use default private hostzone. The default AWS-managed private hosted zones only work within the VPC where the endpoint exists and won't function across VPC peering connections.
+- **Create Custom Private Hosted Zones**: For each AWS service you need to access (e.g, CloudWatch Logs), create a Route53 private hosted zone with the service's domain name (e.g. logs.AWS-REGION-NAME.amazonaws.com).
+- **Configure A Records**: Within each private hosted zone, create alias A records pointing to the corresponding VPC endpoint's DNS entry.
+- **Associate with Peered VPCs**: The private hosted zones must be associated with each peered VPC that needs to access the endpoints, not just with the central VPC where the endpoints reside.
+- **Verify DNS Resolution**: After configuration, verify that resources in the peered VPCs can properly resolve the AWS service endpoints to the private IP addresses of the VPC endpoints in the shared VPC.
+
+### Conclusion
+
+Implementing VPC endpoints in a shared VPC with VPC peering offers a cost-effective, secure alternative to NAT Gateways for AWS service access. But proper configuration of VPC peering, DNS and security groups is critical to ensure connectivity.  
+Always verify connectivity through thorough testing before deploying to production.
