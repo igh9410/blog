@@ -21,7 +21,11 @@ There are two primary approaches to enable this connectivity, each with differen
 A common and straightforward approach is to deploy a NAT Gateway in your VPC, enabling resources in private subnets to access AWS services over the public internet.  
 While this works well, it introduces:
 
-### Option 2: VPC Endpoints with AWS PrivateLink
+- NAT Gateway Hourly cost which is $0.045 per hour
+- NAT Gateway Data Processing Charge ($0.045 per GB)
+- Potential security considerations with traffic leaving the AWS network
+
+### Option 2: Better Alternative - VPC Endpoints with AWS PrivateLink
 
 VPC endpoints are virtual devices that allow you to privately connect your VPC to supported AWS services without requiring an internet gateway or NAT device. They act as entry points within your VPC that AWS services can use to receive requests.  
 VPC endpoints have several benefits compared to using NAT Gateway to access AWS services including:
