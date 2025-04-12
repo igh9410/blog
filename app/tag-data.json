@@ -1,1 +1,1 @@
-{"container":2,"docker":2,"kubernetes":3,"terraform":4,"devops":4,"aws":2,"ecs":1,"aurora":1,"mysql":2,"postgres":3,"sql":3,"database":3,"index":1,"go":1,"next-js":5,"math":4,"ols":4,"gcp":1,"helm":1,"gitops":1,"vpc":1,"multi-author":1,"feature":1}
+{"kubernetes":4,"gcp":2,"terraform":5,"helm":2,"gitops":2,"aws":2,"vpc":1,"devops":4,"ecs":1,"aurora":1,"container":2,"docker":2,"mysql":2,"postgres":3,"sql":3,"database":3,"index":1,"go":1,"next-js":5,"math":4,"ols":4,"multi-author":1,"feature":1}

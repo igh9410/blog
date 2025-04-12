@@ -9,7 +9,9 @@ summary: 'Building a GitOps Pipeline with ArgoCD on GKE using Terraform and Helm
 
 # Building a GitOps Pipeline with ArgoCD on GKE using Terraform and Helm - Part 1
 
-In this blog post, I will share my approach to building a GitOps pipeline with GitHub Actions and ArgoCD on GKE using Terraform and Helm.
+In this blog post, I will share my approach to building a GitOps pipeline with GitHub Actions and ArgoCD on Google Kubernetes Engine (GKE) using Terraform and Helm.
+The code I included in this blog post is the code I actually used in my private repositories, modified for the blog post including masking sensitive information and application names.
+You can find the complete infrastructure code in my [GitHub repository](https://github.com/igh9410/k8s-practice).
 
 ## Prerequisites
 
@@ -18,11 +20,531 @@ In this blog post, I will share my approach to building a GitOps pipeline with G
 
 ## Overview
 
-I want to introduce a GitOps pipeline to the existing application codebase with Kubernetes deployments.
-The piepeline looks like the below diagram:
+I want to introduce a GitOps pipeline to the existing application codebase with Kubernetes deployments.  
+The pipeline looks like the below diagram:
 ![GitOps Pipeline](/static/images/markdown/gitops-pipeline.png)
 
 So basically, the pipeline will be triggered by a push to the `main` branch of the application repository.
-Then GitHub Actions will build the application and push the application Docker image to the GCP Artifact Registry.
+Next, GitHub Actions will build the application and push the application Docker image to the GCP Artifact Registry.
 Then ArgoCD Image Updater will detect the new image and create a new commit to the `main` branch of the infrastructure repository, updating the deployment with the new image.
 Finally, ArgoCD periodically syncs the changes to the GKE cluster, updating the deployment with the new image.
+
+## Provisioning the GCP Service Account, GitHub Actions OIDC, and GKE Cluster
+
+I used Terraform to provision the Google Kubernetes Engine cluster. Also, I used Helm to deploy the ArgoCD application to the cluster.
+
+### Terraform
+
+So in the infrastructure repository, I created application-specific folder for the application.
+
+```bash
+.
+├── application
+│   ├── terraform/dev
+```
+
+In the `terraform/dev` folder, I created `backend.tf` file to initialize the Terraform configuration and backend.
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "terraform-practice"
+    prefix = "application/dev"
+  }
+}
+```
+
+This was the first time I used GCP so I had to take some time to understand the Terraform configuration.  
+Unlike AWS, GCP's IAM control is based on the project level, not the account level.  
+So main.tf includes GCP-specific configurations including enabling the required APIs.
+I enabled the following APIs in GCP console:
+
+- Kubernetes Engine API
+- Artifact Registry API
+- Identity and Access Management (IAM) API
+- Compute Engine API
+- Cloud Logging API
+- Cloud Monitoring API
+
+main.tf includes the following Terraform code to provision the GCP resources:
+
+```hcl
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
+provider "google-beta" {
+  project = var.project_id
+  region  = var.region
+}
+
+# Enable required APIs
+resource "google_project_service" "container" {
+  service            = "container.googleapis.com"
+  disable_on_destroy = false
+}
+
+# Replace Container Registry with Artifact Registry
+resource "google_project_service" "artifactregistry" {
+  service            = "artifactregistry.googleapis.com"
+  disable_on_destroy = false
+}
+
+# Create Artifact Registry repository
+resource "google_artifact_registry_repository" "sample-app_repo" {
+  provider      = google
+  location      = var.region
+  repository_id = "sample-app-repo"
+  description   = "Docker repository for sample-app applications"
+  format        = "DOCKER"
+
+  depends_on = [
+    google_project_service.artifactregistry
+  ]
+}
+
+# Create a minimal GKE cluster (free tier)
+resource "google_container_cluster" "primary" {
+  name     = var.cluster_name
+  location = var.zone
+
+  remove_default_node_pool = true
+  initial_node_count       = 1
+
+  # Replace the deprecated monitoring_service with logging_config and monitoring_config
+  logging_config {
+    enable_components = ["SYSTEM_COMPONENTS", "WORKLOADS"]
+  }
+
+  monitoring_config {
+    enable_components = ["SYSTEM_COMPONENTS"]
+  }
+
+  # Wait for APIs to be enabled
+  depends_on = [
+    google_project_service.container,
+    google_project_service.artifactregistry,
+  ]
+
+  workload_identity_config {
+    workload_pool = "${var.project_id}.svc.id.goog"
+  }
+}
+
+# Create a separately managed node pool with e2-micro instances (free tier)
+resource "google_container_node_pool" "primary_nodes" {
+  name       = "${var.cluster_name}-node-pool"
+  location   = var.zone
+  cluster    = google_container_cluster.primary.name
+  node_count = 2
+  node_config {
+    # Upgrade from e2-micro to a slightly larger instance
+    machine_type = "e2-small" # More memory and CPU
+
+    # Google recommends custom service accounts with minimal permissions
+    # Create a service account with minimal permissions in the console and reference it here
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/devstorage.read_only",
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring",
+    ]
+  }
+
+  autoscaling {
+    min_node_count = 1
+    max_node_count = 3
+  }
+}
+
+# Configure kubectl to use the new cluster
+resource "null_resource" "configure_kubectl" {
+  depends_on = [google_container_node_pool.primary_nodes]
+
+  provisioner "local-exec" {
+    command = "gcloud container clusters get-credentials ${var.cluster_name} --zone ${var.zone} --project ${var.project_id}"
+  }
+}
+
+# Add this resource to create the GCS bucket for Terraform state
+resource "google_storage_bucket" "terraform_state" {
+  name          = "your-unique-terraform-state-bucket"
+  location      = var.region
+  force_destroy = false
+
+  # Enable versioning for state file tracking
+  versioning {
+    enabled = true
+  }
+
+
+  lifecycle_rule {
+    condition {
+      age = 30 # Keep old versions for 30 days
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # Ensure the bucket is created before other resources
+  depends_on = [
+    google_project_service.artifactregistry
+  ]
+}
+```
+
+Also, in application repository, I created the following GitHub Actions workflow to build the application and push the Docker image to the GCP Artifact Registry.
+
+```yaml
+name: Build and Deploy
+
+on:
+  # Automatic trigger on push to main
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'apps/*' # frontend apps
+      - 'packages/*' # frontend packages
+
+  # Manual trigger from GitHub console
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - qa
+          - staging
+          - production
+      target_ref:
+        description: 'Commit hash or tag to deploy (leave blank for latest)'
+        required: false
+        default: ''
+
+# Concurrency group to prevent concurrent deployments to the same environment
+concurrency:
+  group: api-${{ github.event.inputs.environment || github.ref }}
+
+permissions:
+  contents: write # Required for checkout and pushing changes
+  id-token: write # Required for OIDC authentication
+
+jobs:
+  determine-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      should_deploy: ${{ steps.set-env.outputs.should_deploy }}
+      target_ref: ${{ steps.set-env.outputs.target_ref }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.target_ref || github.ref }}
+
+      - name: Determine deployment parameters
+        id: set-env
+        run: |
+          # For manual trigger, use the provided inputs
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "target_ref=${{ github.event.inputs.target_ref || github.sha }}" >> $GITHUB_OUTPUT
+            echo "Manual deployment to ${{ github.event.inputs.environment }} environment"
+          else
+            # For automatic trigger, always deploy to dev environment
+            echo "environment=dev" >> $GITHUB_OUTPUT
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "target_ref=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "Automatic deployment to dev environment from push to main"
+          fi
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: needs.determine-environment.outputs.should_deploy == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-environment.outputs.target_ref }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: 'gramnuri-dev'
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker asia-northeast3-docker.pkg.dev
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: |
+            GCP_ARTIFACT_REGISTRY_URL:${{ needs.determine-environment.outputs.target_ref }}
+```
+
+This workflow requires OIDC authentication of GitHub Actions service account to access the GCP Artifact Registry.
+I found out in GCP, service account is similar to AWS's IAM role.
+So I created a service account in Terraform and added the following IAM policy binding to the service account:
+
+```hcl
+# Create a Service Account for GitHub Actions
+resource "google_service_account" "github_actions_sa" {
+  project      = var.project_id
+  account_id   = "github-actions-sa"
+  display_name = "GitHub Actions Service Account"
+  description  = "Service account for GitHub Actions CI/CD"
+}
+
+# Grant Artifact Registry Writer permissions
+resource "google_project_iam_member" "github_actions_artifact_registry" {
+  project = var.project_id
+  role    = "roles/artifactregistry.writer"
+  member  = "serviceAccount:${google_service_account.github_actions_sa.email}"
+}
+
+# Grant GKE Developer permissions
+resource "google_project_iam_member" "github_actions_gke" {
+  project = var.project_id
+  role    = "roles/container.developer"
+  member  = "serviceAccount:${google_service_account.github_actions_sa.email}"
+}
+
+# Allow GitHub Actions to impersonate the service account
+resource "google_service_account_iam_binding" "workload_identity_binding" {
+  service_account_id = google_service_account.github_actions_sa.name
+  role               = "roles/iam.workloadIdentityUser"
+
+  members = [
+    "principalSet://iam.googleapis.com/projects/${var.project_number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.repository/${var.github_repo}"
+  ]
+}
+```
+
+This service account is used in the GitHub Actions workflow to build the application and push the Docker image to the GCP Artifact Registry.
+After running the terraform plan and apply, now it's time to provision the Kubernetes resources.
+
+### Helm Install with Terraform
+
+Now, I need to create Kubernetes resources. At first, I tried provisioning the Kubernetes manifests with Terraform which was a bad idea.
+What I found out is that simply Kubernetes manifests is very tricky to manage via Terraform since it's YAML files and has conflicts with Terraform's HCL.
+
+So I took a hybrid approach: use Terraform to provision ArgoCD and ArgoCD Image Updater using Helm charts but reference the Kubernetes manifests directly via helm show values command.
+
+For example, to provision the ArgoCD Image Updater, I ran the following command and referenced the yaml file in Terraform.
+
+```bash
+helm show values argo/argocd-image-updater --version 0.12.0 > argocd-image-updater.yaml
+```
+
+And I also created values directory in application/terraform/dev/values directory to save the YAML values for the Helm charts and reference them in Terraform.
+
+```bash
+.
+├── application
+│   ├── terraform/dev
+│   │   ├── values
+│   │   │   ├── argocd-image-updater.yaml
+│   │   │   └── argocd.yaml
+```
+
+And then I could reference the yaml file in Terraform.
+
+```hcl
+provider "kubernetes" {
+  host                   = "https://${google_container_cluster.primary.endpoint}"
+  token                  = data.google_client_config.default.access_token
+  cluster_ca_certificate = base64decode(google_container_cluster.primary.master_auth.0.cluster_ca_certificate)
+}
+
+
+data "google_client_config" "default" {}
+
+# Add Helm provider for ArgoCD installation
+provider "helm" {
+  kubernetes {
+    host                   = "https://${google_container_cluster.primary.endpoint}"
+    token                  = data.google_client_config.default.access_token
+    cluster_ca_certificate = base64decode(google_container_cluster.primary.master_auth.0.cluster_ca_certificate)
+  }
+}
+
+
+data "kubernetes_service" "sample-app_api" {
+  metadata {
+    name      = "dev-sample-app-api"
+    namespace = "default" # Update if you change the namespace
+  }
+  depends_on = [
+    null_resource.configure_kubectl,
+    helm_release.argocd
+  ]
+}
+
+# Create ArgoCD namespace
+resource "kubernetes_namespace" "argocd" {
+  metadata {
+    name = "argocd"
+  }
+}
+
+# Install ArgoCD using Helm with optimized settings
+resource "helm_release" "argocd" {
+  name       = "argocd"
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argo-cd"
+  version    = "7.8.13"
+  namespace  = kubernetes_namespace.argocd.metadata[0].name
+
+  # Basic ArgoCD configuration
+  set {
+    name  = "server.service.type"
+    value = "LoadBalancer"
+  }
+
+
+  # Enable insecure mode for Cloudflare Flexible SSL
+  set {
+    name  = "server.insecure"
+    value = "true"
+  }
+
+  # Add resource limits to prevent OOM issues
+  set {
+    name  = "server.resources.limits.cpu"
+    value = "300m"
+  }
+  set {
+    name  = "server.resources.limits.memory"
+    value = "512Mi"
+  }
+  set {
+    name  = "server.resources.requests.cpu"
+    value = "100m"
+  }
+  set {
+    name  = "server.resources.requests.memory"
+    value = "256Mi"
+  }
+
+  # Limit repo server resources
+  set {
+    name  = "repoServer.resources.limits.memory"
+    value = "256Mi"
+  }
+  set {
+    name  = "repoServer.resources.requests.memory"
+    value = "128Mi"
+  }
+
+  # Disable unnecessary components to save resources
+  set {
+    name  = "applicationSet.enabled"
+    value = "false"
+  }
+  set {
+    name  = "notifications.enabled"
+    value = "false"
+  }
+
+  # Add these critical settings
+  set {
+    name  = "server.extraArgs"
+    value = "{--insecure}"
+  }
+
+  set {
+    name  = "configs.params.server\\.insecure"
+    value = "true"
+  }
+
+  # Configure external URL explicitly
+  set {
+    name  = "server.config.url"
+    value = "https://argo.${var.domain_name}"
+  }
+
+  set {
+    name  = "server.config.admin.enabled"
+    value = "true"
+  }
+
+  # Add ingress configuration
+  set {
+    name  = "server.ingress.enabled"
+    value = "true"
+  }
+
+  set {
+    name  = "server.ingress.hosts[0]"
+    value = "argo.${var.domain_name}"
+  }
+
+  # Proxy settings
+  set {
+    name  = "server.config.proxy.enabled"
+    value = "true"
+  }
+
+  depends_on = [
+    google_container_node_pool.primary_nodes,
+    null_resource.configure_kubectl
+  ]
+}
+
+resource "helm_release" "argocd_image_updater" {
+  name       = "argocd-image-updater"
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argocd-image-updater"
+  namespace  = "argocd"
+  version    = "0.12.0"
+
+  values = [file("values/argocd-image-updater.yaml")] # Reference the value after running helm show values command
+  depends_on = [
+    helm_release.argocd
+  ]
+}
+
+# Create a Google service account for Argo CD Image Updater
+resource "google_service_account" "argocd_image_updater" {
+  # Using a generic ID, ensure it's unique within your project
+  account_id   = "argocd-image-updater-sa"
+  display_name = "Service Account for Argo CD Image Updater"
+  project      = var.project_id
+}
+
+# Grant the service account access to Artifact Registry
+resource "google_project_iam_member" "argocd_image_updater_artifact_registry" {
+  project = var.project_id
+  role    = "roles/artifactregistry.reader"
+  member  = "serviceAccount:${google_service_account.argocd_image_updater.email}"
+}
+
+# Allow the Kubernetes service account to impersonate the Google service account
+resource "google_service_account_iam_binding" "argocd_image_updater_workload_identity" {
+  service_account_id = google_service_account.argocd_image_updater.name
+  role               = "roles/iam.workloadIdentityUser"
+  members = [
+    # Reference the generic K8s SA name used in the Helm chart values
+    "serviceAccount:${var.project_id}.svc.id.goog[argocd/argocd-image-updater-sa]"
+  ]
+}
+
+```
+
+After running the terraform plan and apply, now it's time to configure Helm charts and configure ArgoCD.
+To be continued in [Part 2](./provision-kubernetes-on-gcp-part-2).

@@ -1,0 +1,762 @@
+---
+title: 'Building a GitOps Pipeline with ArgoCD on GKE using Terraform and Helm - Part 2'
+date: '2025-04-13'
+lastmod: '2025-04-13'
+tags: ['Kubernetes', 'GCP', 'Terraform', 'Helm', 'GitOps']
+draft: false
+summary: 'Building a GitOps Pipeline with ArgoCD on GKE using Terraform and Helm - Part 2'
+---
+
+# Building a GitOps Pipeline with ArgoCD on GKE using Terraform and Helm - Part 2
+
+Continue from [Part 1](./provision-kubernetes-on-gcp-part-1).
+I will continue configuring Helm charts and ArgoCD on this part.
+The code I included in this blog post is the code I actually used in my private repositories, modified for the blog post including masking sensitive information and application names.
+You can find the complete infrastructure code in my [GitHub repository](https://github.com/igh9410/k8s-practice).
+
+## ArgoCD
+
+ArgoCD is a declarative, GitOps continuous delivery tool for Kubernetes.
+With ArgoCD, there's no need to run GitHub Actions for Continuous Deployment but ArgoCD handles the deployment.
+So the CI/CD pipeline would be handled with both GitHub Actions and ArgoCD.
+GitHub Actions handles the CI part, build and push of the Docker image to the GCP Artifact Registry.
+ArgoCD handles the CD part, deployment of the Docker image to the GKE cluster.
+
+To provision ArgoCD, I used the ArgoCD Helm chart via Terraform.
+
+```hcl
+# Install ArgoCD using Helm with optimized settings
+resource "helm_release" "argocd" {
+  name       = "argocd"
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argo-cd"
+  version    = "7.8.13"
+  namespace  = kubernetes_namespace.argocd.metadata[0].name
+
+  # Basic ArgoCD configuration
+  set {
+    name  = "server.service.type"
+    value = "LoadBalancer"
+  }
+
+
+  # Enable insecure mode for Cloudflare Flexible SSL
+  set {
+    name  = "server.insecure"
+    value = "true"
+  }
+
+
+
+  # Add resource limits to prevent OOM issues
+  set {
+    name  = "server.resources.limits.cpu"
+    value = "300m"
+  }
+  set {
+    name  = "server.resources.limits.memory"
+    value = "512Mi"
+  }
+  set {
+    name  = "server.resources.requests.cpu"
+    value = "100m"
+  }
+  set {
+    name  = "server.resources.requests.memory"
+    value = "256Mi"
+  }
+
+  # Limit repo server resources
+  set {
+    name  = "repoServer.resources.limits.memory"
+    value = "256Mi"
+  }
+  set {
+    name  = "repoServer.resources.requests.memory"
+    value = "128Mi"
+  }
+
+  # Disable unnecessary components to save resources
+  set {
+    name  = "applicationSet.enabled"
+    value = "false"
+  }
+  set {
+    name  = "notifications.enabled"
+    value = "false"
+  }
+
+  # Add these critical settings
+  set {
+    name  = "server.extraArgs"
+    value = "{--insecure}"
+  }
+
+  set {
+    name  = "configs.params.server\\.insecure"
+    value = "true"
+  }
+
+  # Configure external URL explicitly
+  set {
+    name  = "server.config.url"
+    value = "https://argo.${var.domain_name}"
+  }
+
+  set {
+    name  = "server.config.admin.enabled"
+    value = "true"
+  }
+
+  # Add ingress configuration
+  set {
+    name  = "server.ingress.enabled"
+    value = "true"
+  }
+
+  set {
+    name  = "server.ingress.hosts[0]"
+    value = "argo.${var.domain_name}"
+  }
+
+  # Proxy settings
+  set {
+    name  = "server.config.proxy.enabled"
+    value = "true"
+  }
+
+  depends_on = [
+    google_container_node_pool.primary_nodes,
+    null_resource.configure_kubectl
+  ]
+}
+
+```
+
+At first, I tried to create the ArgoCD application in Terraform too but it was a bad idea as I mentioned in [Part 1](./provision-kubernetes-on-gcp-part-1) because of the incompatibility between Terraform and Helm.
+I tried creating like below:
+
+```hcl
+
+ resource "kubernetes_manifest" "argocd_application_dev" {
+   manifest = {
+     apiVersion = "argoproj.io/v1alpha1"
+     kind       = "Application"
+     metadata = {
+       name      = "application-repo-dev"
+       namespace = "argocd"
+     }
+     spec = {
+       project = "default"
+       source = {
+         repoURL        = "https://github.com/application-repo/application-repo.git"
+         targetRevision = "HEAD"
+         path           = "k8s/overlays/dev"
+       }
+       destination = {
+         server    = "https://kubernetes.default.svc"
+         namespace = "default"
+       }
+       syncPolicy = {
+         automated = {
+           prune    = true
+           selfHeal = true
+         }
+       }
+     }
+   }
+
+   depends_on = [
+     helm_release.argocd,
+     kubernetes_secret.github_access  # Add dependency on the GitHub secret
+   ]
+ }
+
+```
+
+But since it got many conflicts when trying to apply configuration via Terraform, I removed the state from Terraform and got the ArgoCD application manifests via Helm.
+
+```bash
+kubectl get application application-repo-dev -n argocd -o yaml > application-repo-dev.yaml
+```
+
+In the retrieved manifest, I added additional annotations to the application resource to track the Docker image in GCP Artifact Registry.
+
+The additional annotations looks like below:
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  annotations:
+    argocd-image-updater.argoproj.io/git-branch: main
+    argocd-image-updater.argoproj.io/application-api.allow-tags: regexp:^.*$
+    argocd-image-updater.argoproj.io/application-api.kustomize.image-name: asia-northeast3-docker.pkg.dev/application-dev/application-repo/application-api
+    argocd-image-updater.argoproj.io/application-api.update-strategy: latest
+    argocd-image-updater.argoproj.io/image-list: application-api=asia-northeast3-docker.pkg.dev/application-dev/application-repo/application-api
+```
+
+And to login to the ArgoCD UI, the admin password is generated by the Helm chart and is hidden in the `argocd-initial-admin-secret` Kubernetes secret.
+
+To retrieve the password, run the following command:
+
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+```
+
+Then, I manually changed the password in ArgoCD UI for the admin user.
+
+### Kubernetes Security Hardening
+
+In Kubernetes environment, application configuration values are stored in Kubernetes secrets.
+Kubernetes secrets can be created via `kubectl` or `kubectl apply` command.
+
+e.g.
+
+```bash
+kubectl create secret generic my-app-secrets \
+  --from-literal=database_url="your-database-url" \
+  --dry-run=client -o yaml > secrets.yaml
+```
+
+For security reasons, Kubernetes secrets are git-ignored but for ArgoCD to use the secrets, the secrets are needed to be git-tracked.
+To handle this ironic situation, there's an open-source project that handles encryption of Kubernetes secrets so that they can be git-tracked.
+It's called [Sealed-Secrets](https://github.com/bitnami-labs/sealed-secrets).
+
+To use Sealed-Secrets, the following steps are needed to be taken:
+
+1. Install Sealed-Secrets controller in the Kubernetes cluster.
+2. Encrypt the Kubernetes secrets using Sealed-Secrets controller.
+3. Store the encrypted Kubernetes secrets in the Git repository.
+4. Decrypt the Kubernetes secrets using Sealed-Secrets controller when the Kubernetes cluster is deployed.
+
+Sealed-Secrets is installed via Helm chart.
+
+```bash
+helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
+helm repo update
+helm install sealed-secrets -n kube-system --set-string fullnameOverride=sealed-secrets-controller sealed-secrets/sealed-secrets
+```
+
+After installing Sealed-Secrets controller, the controller pod is running in the `kube-system` namespace.
+
+```bash
+kubectl get pods -n kube-system -l app.kubernetes.io/name=sealed-secrets
+```
+
+To encrypt the Kubernetes secrets, run the following command:
+
+```bash
+kubeseal -o yaml < secrets.yaml > sealed-secrets.yaml
+```
+
+Now, the sealed-secrets.yaml file is encrypted and can be git-tracked.
+
+ArgoCD can use the sealed-secrets.yaml file to decrypt the Kubernetes secrets.
+argocd.yaml file would look like below to use the sealed-secrets.yaml file.
+
+```yaml
+piVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  creationTimestamp: '2025-03-30T09:23:22Z'
+  generation: 123
+  name: application-dev
+  namespace: argocd
+  resourceVersion: '7060407'
+  uid: 3b5f4332-6d45-46cb-820a-76c2fd4c68a1
+  annotations:
+    # 1. Define the image to track
+    argocd-image-updater.argoproj.io/image-list: application-api=asia-northeast3-docker.pkg.dev/application-dev/application-repo/application-api
+    # 2. Define the update strategy
+    argocd-image-updater.argoproj.io/application-api.update-strategy: latest
+    # 3. Allow tags using regex
+    argocd-image-updater.argoproj.io/application-api.allow-tags: regexp:^.*$
+    # 4. Define Git write-back method
+    argocd-image-updater.argoproj.io/write-back-method: git:secret:argocd/github-access
+    # 5. Define Kustomize image name to update
+    argocd-image-updater.argoproj.io/application-api.kustomize.image-name: asia-northeast3-docker.pkg.dev/application-dev/application-repo/application-api # Add this new annotation to specify the branch
+    argocd-image-updater.argoproj.io/git-branch: main
+spec:
+  destination:
+    namespace: default
+    server: https://kubernetes.default.svc
+  ignoreDifferences:
+    - group: ''
+      jsonPointers:
+        - /*
+      kind: Secret
+      name: application-secrets
+      namespace: default
+  project: default
+  source:
+    path: application/k8s/overlays/dev
+    repoURL: https://github.com/YourGitHubAccount/YourInfraRepoName.git
+    targetRevision: main
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+status:
+  controllerNamespace: argocd
+  health:
+    lastTransitionTime: '2025-03-30T12:43:41Z'
+    status: Healthy
+  history:
+    - deployStartedAt: '2025-03-30T12:43:35Z'
+      deployedAt: '2025-03-30T12:43:36Z'
+      id: 0
+      initiatedBy:
+        automated: true
+      revision: e1346adc8ade36d9b521edaba1d6b8084172362e
+      source:
+        path: application/k8s/overlays/dev
+        repoURL: https://github.com/YourGitHubAccount/YourInfraRepoName.git
+        targetRevision: main
+  operationState:
+    finishedAt: '2025-03-30T12:43:36Z'
+    message: successfully synced (all tasks run)
+    operation:
+      initiatedBy:
+        automated: true
+      retry:
+        limit: 5
+      sync:
+        prune: true
+        revision: e1346adc8ade36d9b521edaba1d6b8084172362e
+    phase: Succeeded
+    startedAt: '2025-03-30T12:43:35Z'
+    syncResult:
+      resources:
+        - group: ''
+          hookPhase: Running
+          kind: Service
+          message: service/dev-application-api unchanged
+          name: dev-application-api
+          namespace: default
+          status: Synced
+          syncPhase: Sync
+          version: v1
+        - group: apps
+          hookPhase: Running
+          kind: Deployment
+          message: deployment.apps/dev-application-api configured
+          name: dev-application-api
+          namespace: default
+          status: Synced
+          syncPhase: Sync
+          version: v1
+      revision: e1346adc8ade36d9b521edaba1d6b8084172362e
+      source:
+        path: application/k8s/overlays/dev
+        repoURL: https://github.com/YourGitHubAccount/YourInfraRepoName.git
+        targetRevision: main
+  reconciledAt: '2025-03-30T14:49:32Z'
+  resources:
+    - health:
+        status: Healthy
+      kind: Service
+      name: dev-application-api
+      namespace: default
+      status: Synced
+      version: v1
+    - group: apps
+      health:
+        status: Healthy
+      kind: Deployment
+      name: dev-application-api
+      namespace: default
+      status: Synced
+      version: v1
+  sourceHydrator: {}
+  sourceType: Kustomize
+  summary:
+    images:
+      - asia-northeast3-docker.pkg.dev/application-dev/application-repo/application-api:d10e7ca9a8da01ea7fbe27803138b9c8b79736fc
+  sync:
+    comparedTo:
+      destination:
+        namespace: default
+        server: https://kubernetes.default.svc
+      ignoreDifferences:
+        - jsonPointers:
+            - /*
+          kind: Secret
+          name: application-secrets
+          namespace: default
+      source:
+        path: application/k8s/overlays/dev
+        repoURL: https://github.com/YourGitHubAccount/YourInfraRepoName.git
+        targetRevision: main
+    revision: c57ca2fee061de74a5b1ccc346f34e0190733762
+    status: Synced
+```
+
+### Kustomize
+
+Kustomize is a tool for managing Kubernetes configurations across multiple environments.
+It's used to generate Kubernetes manifests from a base configuration.
+
+To use Kustomize, the following steps are needed to be taken:
+
+1. Create a base configuration.
+2. Create an overlay configuration.
+3. Generate Kubernetes manifests from the base and overlay configurations.
+
+The base configuration is the configuration that is used as a base for all environments.
+The overlay configuration is the configuration that is used to customize the base configuration for a specific environment.
+
+I created a base configuration for the application and an overlay configuration for the development environment.
+
+Kustomize must have kustomization.yaml file to know what to build.
+So in this case, sample-app/k8s/base directory and sample-app/k8s/overlays/dev directory must have kustomization.yaml file.
+
+```bash
+kubectl kustomize sample-app/k8s/base > sample-app-base.yaml
+kubectl kustomize sample-app/k8s/overlays/dev > sample-app-dev.yaml
+```
+
+sample-app/k8s/base/kustomization.yaml file looks like below:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+```
+
+sample-app/base/deployment.yaml file looks like below:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app-api
+  labels:
+    app: sample-app-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sample-app-api
+  template:
+    metadata:
+      labels:
+        app: sample-app-api
+    spec:
+      containers:
+        - name: sample-app-api
+          image: YOUR_REGISTRY_HOST/YOUR_GCP_PROJECT_ID/YOUR_REPO_ID/sample-app-api:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: 250m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        kubernetes.io/os: linux
+```
+
+And sample-app/base/service.yaml file looks like below:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-app-api
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: sample-app-api
+  type: LoadBalancer
+```
+
+Based on this base configuration, the sample-app-api service is created as a LoadBalancer service leveraging GCP's Network Load Balancing.
+
+And sample-app/k8s/overlays/dev/kustomization.yaml file looks like below:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namePrefix: dev-
+namespace: default
+resources:
+  - ../../base
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: sample-app-api
+images:
+  - name: YOUR_REGISTRY_HOST/YOUR_GCP_PROJECT_ID/YOUR_REPO_ID/sample-app-api
+    newTag: placeholder-tag
+```
+
+deployment-patch.yaml is a patch file to update the image tag of the sample-app-api deployment.
+It doesn't define the new deployment but overrides the image tag of the existing deployment.
+Instead of copying the entire deployment.yaml from the base into the overlay and then modifying it, Kustomize patches allow you to define only the differences.  
+And deployment-patch.yaml file looks like below:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: sample-app-api
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sample-app-secrets
+                  key: database_url
+            - name: FIREBASE_PROJECT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: sample-app-secrets
+                  key: firebase_project_id
+            - name: FIREBASE_CLIENT_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: sample-app-secrets
+                  key: firebase_client_email
+            - name: FIREBASE_CLIENT_CERT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sample-app-secrets
+                  key: firebase_client_cert_url
+            - name: ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: sample-app-secrets
+                  key: environment
+```
+
+### Final Step: Enable ArgoCD Image Updater
+
+ArgoCD Image Updater is a tool that updates the image tag of the Kubernetes resources automatically.
+It creates a new Git commit to update the image tag of the Kubernetes resources when the image tag is updated in the GCP Artifact Registry.
+
+To enable ArgoCD Image Updater, the following steps are needed to be taken:
+
+1. Install ArgoCD Image Updater controller in the Kubernetes cluster.
+2. Create a new Git commit to update the image tag of the Kubernetes resources when the image tag is updated in the GCP Artifact Registry.
+3. ArgoCD Image Updater controller will update the image tag of the Kubernetes resources in the Git repository.
+
+I provisioned ArgoCD Image Updater controller via Helm chart with Terraform.
+
+```bash
+helm show values argo/argocd-image-updater --version 0.12.0 > argocd-image-updater.yaml
+```
+
+````hcl
+resource "helm_release" "argocd_image_updater" {
+  name       = "argocd-image-updater"
+  repository = "https://argoproj.github.io/argo-helm"
+  chart      = "argocd-image-updater"
+  namespace  = "argocd"
+  version    = "0.12.0"
+
+  values = [file("values/argocd-image-updater.yaml")]
+  depends_on = [
+    helm_release.argocd
+  ]
+}
+
+The default argocd-image-updater.yaml file looks like below:
+
+```yaml
+# -- Replica count for the deployment. It is not advised to run more than one replica.
+replicaCount: 1
+image:
+  # -- Default image repository
+  repository: quay.io/argoprojlabs/argocd-image-updater
+  # -- Default image pull policy
+  pullPolicy: Always
+  # -- Overrides the image tag whose default is the chart appVersion
+  tag: ""
+
+# -- The deployment strategy to use to replace existing pods with new ones
+updateStrategy:
+  type: Recreate
+# -- ImagePullSecrets for the image updater deployment
+imagePullSecrets: []
+# -- Global name (argocd-image-updater.name in _helpers.tpl) override
+nameOverride: ""
+# -- Global fullname (argocd-image-updater.fullname in _helpers.tpl) override
+fullnameOverride: ""
+# -- Global namespace (argocd-image-updater.namespace in _helpers.tpl) override
+namespaceOverride: ""
+
+# -- Create cluster roles for cluster-wide installation.
+## Used when you manage applications in the same cluster where Argo CD Image Updater runs.
+## If you want to use this, please set `.Values.rbac.enabled` true as well.
+createClusterRoles: true
+
+# -- Extra arguments for argocd-image-updater not defined in `config.argocd`.
+# If a flag contains both key and value, they need to be split to a new entry
+extraArgs: []
+  # - --disable-kubernetes
+  # - --dry-run
+  # - --health-port
+  # - 8080
+  # - --interval
+  # - 2m
+  # - --kubeconfig
+  # - ~/.kube/config
+  # - --match-application-name
+  # - staging-*
+  # - --max-concurrency
+  # - 5
+  # - --once
+  # - --registries-conf-path
+  # - /app/config/registries.conf
+
+# -- Extra environment variables for argocd-image-updater
+extraEnv: []
+  # - name: AWS_REGION
+  #   value: "us-west-1"
+
+# -- Extra envFrom to pass to argocd-image-updater
+extraEnvFrom: []
+  # - configMapRef:
+  #     name: config-map-name
+  # - secretRef:
+  #     name: secret-name
+
+# -- Extra K8s manifests to deploy for argocd-image-updater
+## Note: Supports use of custom Helm templates
+extraObjects: []
+  # - apiVersion: secrets-store.csi.x-k8s.io/v1
+  #   kind: SecretProviderClass
+  #   ...
+
+````
+
+We don't need all the settings in the argocd-image-updater.yaml file.
+So I override the default generated argocd-image-updater.yaml file with the following values:
+
+```yaml
+---
+image:
+  tag: 'v0.12.2'
+
+metrics:
+  enabled: true
+
+config:
+  registries:
+    - name: 'google'
+      prefix: 'YOUR_REGISTRY_HOST'
+      api_url: 'https://YOUR_REGISTRY_HOST'
+      defaultns: 'YOUR_GCP_PROJECT_ID/YOUR_REPO_ID'
+      insecure: false
+      default: true
+      credentials: 'ext:/scripts/gke-workload-identity-auth.sh' # Use external script
+
+serviceAccount:
+  create: true
+  name: 'argocd-image-updater-sa'
+  annotations:
+    iam.gke.io/gcp-service-account: argocd-image-updater-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com
+
+authScripts:
+  enabled: true
+  scripts:
+    gke-workload-identity-auth.sh: |
+      #!/bin/sh
+      # Always fetch a fresh token
+      ACCESS_TOKEN=$(wget --header 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token -q -O - | grep -Eo '"access_token":.*?[^\\]",' | cut -d '"' -f 4)
+      echo "oauth2accesstoken:$ACCESS_TOKEN"
+```
+
+And then apply the override argocd-image-updater.yaml file to the ArgoCD Image Updater controller.
+
+```bash
+kubectl apply -f argocd-image-updater.yaml
+```
+
+First, I got Could not get tags from Google Artifact Registry error for about a couple of days but couldn't find the root cause.
+It's GCP-specific GitHub issue and the solution is to use external script to authenticate with GCP.
+In this GitHub issue [579](https://github.com/argoproj-labs/argocd-image-updater/issues/579), the solution is to use external script to authenticate with GCP.
+
+```bash
+gke-workload-identity-auth.sh: |
+      #!/bin/sh
+      # Always fetch a fresh token
+      ACCESS_TOKEN=$(wget --header 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token -q -O - | grep -Eo '"access_token":.*?[^\\]",' | cut -d '"' -f 4)
+      echo "oauth2accesstoken:$ACCESS_TOKEN"
+```
+
+After that, it seemed working but after about 30 mins of running, the ArgoCD Image Updater controller pod got permission denied error when authenticating with GCP.
+I checked the logs via `kubectl logs -n argocd -l app.kubernetes.io/name=argocd-image-updater` and found the error message below:
+
+```bash
+level=error msg="Could not get tags from registry" error="rpc error: code = PermissionDenied desc = Permission 'roles/artifactregistry.reader' was not granted to service account 'argocd-image-updater-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com'."
+```
+
+It looked like the token expires in 30 minutes and not refreshed. From the GitHub issue above, I found that the solution is to add credsexpire: "59m" in config field.
+
+So the final argocd-image-updater.yaml file looks like below:
+
+```yaml
+---
+image:
+  tag: 'v0.12.2'
+
+metrics:
+  enabled: true
+
+config:
+  registries:
+    - name: 'google'
+      prefix: 'YOUR_REGISTRY_HOST'
+      api_url: 'https://YOUR_REGISTRY_HOST'
+      defaultns: 'YOUR_GCP_PROJECT_ID/YOUR_REPO_ID'
+      insecure: false
+      default: true
+      credentials: 'ext:/scripts/gke-workload-identity-auth.sh' # Use external script
+      credsexpire: '59m'
+
+serviceAccount:
+  create: true
+  name: 'argocd-image-updater-sa'
+  annotations:
+    iam.gke.io/gcp-service-account: argocd-image-updater-sa@YOUR_GCP_PROJECT_ID.iam.gserviceaccount.com
+
+authScripts:
+  enabled: true
+  scripts:
+    gke-workload-identity-auth.sh: |
+      #!/bin/sh
+      # Always fetch a fresh token
+      ACCESS_TOKEN=$(wget --header 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token -q -O - | grep -Eo '"access_token":.*?[^\\]",' | cut -d '"' -f 4)
+      echo "oauth2accesstoken:$ACCESS_TOKEN"
+```
+
+After applying the override argocd-image-updater.yaml file, the ArgoCD Image Updater controller pod keeps working without authentication errors.
+Although the above solution worked, I honestly don't know the root cause of the permission denied error for now.
+And after dealing with this issue for a while, I could confirm that ArgoCD Image Updater creates a commit to the infra repository's image tags when the image tag is updated in the GCP Artifact Registry.
+
+![GitOps final](/static/images/markdown/git-ops-final.png)
+
+![ArgoCD Image Updater](/static/images/markdown/argoui.png)
+
+## Conclusion
+
+In this blog post, I shared my approach to building a GitOps pipeline with GitHub Actions and ArgoCD on Google Kubernetes Engine (GKE) using Terraform and Helm.
+The code I included in this blog post is the code I actually used in my private repositories, modified for the blog post including masking sensitive information and application names.
+You can find the complete infrastructure code in my [GitHub repository](https://github.com/igh9410/k8s-practice).
