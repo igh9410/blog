@@ -338,7 +338,7 @@ resource "google_service_account_iam_binding" "workload_identity_binding" {
 This service account is used in the GitHub Actions workflow to build the application and push the Docker image to the GCP Artifact Registry.
 After running the terraform plan and apply, now it's time to provision the Kubernetes resources.
 
-### Kustomization and Helm Install with Terraform
+### Helm Install with Terraform
 
 Now, I need to create Kubernetes resources. At first, I tried provisioning the Kubernetes manifests with Terraform which was a bad idea.
 What I found out is that simply Kubernetes manifests is very tricky to manage via Terraform since it's YAML files and has conflicts with Terraform's HCL.
@@ -547,4 +547,4 @@ resource "google_service_account_iam_binding" "argocd_image_updater_workload_ide
 ```
 
 After running the terraform plan and apply, now it's time to configure Helm charts and configure ArgoCD.
-To be continued in [Part 2](./provision-kubernetes-on-gcp-part-2.mdx).
+To be continued in [Part 2](./provision-kubernetes-on-gcp-part-2).
