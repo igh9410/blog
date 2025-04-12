@@ -1,0 +1,28 @@
+---
+title: 'Building a GitOps Pipeline with ArgoCD on GKE using Terraform and Helm - Part 1'
+date: '2025-04-12'
+lastmod: '2025-04-12'
+tags: ['Kubernetes', 'GCP', 'Terraform', 'Helm', 'GitOps']
+draft: false
+summary: 'Building a GitOps Pipeline with ArgoCD on GKE using Terraform and Helm - Part 1'
+---
+
+# Building a GitOps Pipeline with ArgoCD on GKE using Terraform and Helm - Part 1
+
+In this blog post, I will share my approach to building a GitOps pipeline with GitHub Actions and ArgoCD on GKE using Terraform and Helm.
+
+## Prerequisites
+
+- A GCP project
+- Two GitHub repositories (one for the application code and one for the infrastructure code)
+
+## Overview
+
+I want to introduce a GitOps pipeline to the existing application codebase with Kubernetes deployments.
+The piepeline looks like the below diagram:
+![GitOps Pipeline](/static/images/markdown/gitops-pipeline.png)
+
+So basically, the pipeline will be triggered by a push to the `main` branch of the application repository.
+Then GitHub Actions will build the application and push the application Docker image to the GCP Artifact Registry.
+Then ArgoCD Image Updater will detect the new image and create a new commit to the `main` branch of the infrastructure repository, updating the deployment with the new image.
+Finally, ArgoCD periodically syncs the changes to the GKE cluster, updating the deployment with the new image.
