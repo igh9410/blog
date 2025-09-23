@@ -1,0 +1,129 @@
+---
+title: '👮 Designing a High-Performance, Secure, Multi-Layer AWS Application Architecture'
+date: '2025-09-23'
+lastmod: '2025-09-23'
+tags: ['Portfolio', 'AWS', 'Security', 'CloudFront', 'WAF', 'ECS', 'Architecture']
+draft: false
+summary: 'Building a production-ready secure application architecture with AWS WAF, CloudFront, ALB, and custom security headers'
+---
+
+# Designing a Secure Multi-Layer AWS Application Architecture
+
+In production environments, security should be built into every layer of the application architecture. Here's how I designed a comprehensive security architecture for a production application that provides multiple layers of protection leveraging CloudFront. By leveraging CloudFront's global edge network, I was able to achieve sufficient performance improvements for international users without the complexity and cost of multi-region deployment.
+
+![Secure Production Application Architecture](<(../static/images/markdown/secure-application-architecture.png)>)
+
+## Architecture Overview
+
+The architecture implements a defense-in-depth strategy with multiple security layers:
+
+1. **AWS WAF** - Web application firewall for threat protection
+2. **CloudFront CDN** - Content delivery and DDoS protection
+3. **Application Load Balancer** - Traffic distribution with custom security
+4. **ECS Services** - Containerized application layer
+5. **Private Database & Cache** - Isolated data layer
+
+## Security Layers Explained
+
+### Layer 1: AWS WAF Protection
+
+AWS WAF sits at the edge, filtering malicious traffic before it reaches the application. It protects against:
+
+- SQL injection attacks
+- Cross-site scripting (XSS)
+- DDoS attacks
+- Bot traffic and scraping attempts
+
+### Layer 2: CloudFront CDN
+
+CloudFront provides additional security and performance benefits:
+
+**Security Benefits:**
+
+- DDoS protection with AWS Shield
+- Geographic restrictions
+- SSL/TLS termination
+- Origin access control
+
+**Performance Benefits:**
+
+- **30% faster response times** for international users compared to direct ALB access
+- **Greater performance impact** for users in remote locations like USA compared to closer regions
+- **Bandwidth optimization** - CloudFront reduces costs as outbound traffic from ALB to CloudFront edge locations is free
+
+**Real-World Impact:**
+
+- **All international users**: 30% improvement in response times
+- **Remote locations (USA, Europe)**: Even more significant performance gains due to greater distance from origin country, Korea
+- **Cost efficiency**: Free data transfer between ALB and CloudFront, with only end-user delivery charged
+
+### Layer 3: Custom Security Headers
+
+A critical security feature prevents direct access to the Application Load Balancer:
+
+**Custom Header**: `X-Security-Example: Secret`
+
+- CloudFront adds this header to all requests forwarded to the ALB
+- ALB rejects any requests without this specific header
+- Prevents direct ALB access, ensuring all traffic goes through the secure pipeline
+- Acts as a shared secret between CloudFront and ALB
+
+### Layer 4: Network Segmentation
+
+The VPC implements proper subnet isolation:
+
+**Public Subnet**:
+
+- Application Load Balancer
+- ECS Services (API servers)
+
+**Private Subnet**:
+
+- MySQL Database (Aurora)
+- Redis Cache (containerized on EC2)
+
+This ensures database and cache layers are never directly accessible from the internet.
+
+## Request Flow
+
+1. Users access the application via HTTPS
+2. AWS WAF filters and validates requests
+3. CloudFront serves cached content or forwards to ALB
+4. CloudFront adds the custom security header
+5. ALB validates the security header and load balances to ECS
+6. ECS services process requests and interact with database/cache
+
+## Key Security Benefits
+
+### Prevents Direct Access
+
+The custom header mechanism ensures no one can bypass CloudFront and WAF protections by directly accessing the ALB endpoint.
+
+### Defense in Depth
+
+Multiple security layers ensure that if one layer is compromised, others provide continued protection.
+
+### Network Isolation
+
+Database and cache components in private subnets are completely isolated from direct internet access.
+
+### Centralized Security Management
+
+All security rules and monitoring are centralized through AWS WAF and CloudFront.
+
+## Production Implementation
+
+This architecture was successfully implemented in a production environment, providing:
+
+- Zero security incidents related to direct ALB access
+- Improved performance through CloudFront caching
+- Reduced load on application servers
+- Simplified security monitoring and alerting
+
+The combination of AWS managed services with custom security controls creates a robust, scalable architecture that maintains high security standards while supporting business growth.
+
+## Conclusion
+
+Building secure applications requires thinking beyond just code-level security. This multi-layer architecture demonstrates how infrastructure design can provide comprehensive protection through strategic placement of security controls, network isolation, and custom access validation.
+
+The architecture also showcases how CloudFront can eliminate the need for complex multi-region deployments while still providing excellent performance for global users—proving that smart use of AWS managed services can deliver enterprise-grade results with simplified operations.
