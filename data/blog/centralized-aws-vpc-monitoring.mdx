@@ -83,7 +83,6 @@ The monitoring VPC implements a layered security approach:
 
 ### VPC Peering Limitations
 
-- **Single Region**: VPC peering works within the same AWS region
 - **Non-Transitive**: Spoke VPCs cannot route through the hub to reach each other (which is desired in this case)
 - **IP Address Overlap**: Ensure non-overlapping CIDR blocks across all VPCs
 
