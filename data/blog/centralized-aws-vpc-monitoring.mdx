@@ -1,11 +1,10 @@
 ---
-title: '🏗️ Production-Grade AWS Infrastructure: Multi-Environment Architecture & CI/CD Design'
+title: '🏗️ Building a Centralized Monitoring Architecture with VPC Peering Hub-and-Spoke Pattern'
 date: '2025-09-23'
 lastmod: '2025-09-23'
-tags:
-  ['AWS', 'VPC', 'Monitoring', 'Infrastructure', 'Prometheus', 'Grafana', 'CI/CD', 'GitHub Actions']
+tags: ['Portfolio', 'AWS', 'VPC', 'Monitoring', 'Infrastructure', 'Prometheus', 'Grafana']
 draft: false
-summary: 'A comprehensive showcase of production AWS infrastructure design and automation, demonstrating real-world DevOps engineering solutions implemented across multiple environments.'
+summary: 'A comprehensive showcase of production AWS infrastructure monitoring architecture with VPC Peering Hub-and-Spoke Pattern'
 ---
 
 # Building a Centralized Monitoring Architecture with VPC Peering Hub-and-Spoke Pattern
@@ -46,9 +45,9 @@ The architecture implements two complementary monitoring approaches:
   - EC2 SSM Messages VPC Endpoint
 - Provides native AWS monitoring and log aggregation
 
-#### Custom Metrics via Prometheus
+#### Metrics via Prometheus
 
-- Applications in each spoke VPC send custom metrics directly to Prometheus
+- Applications in each spoke VPC send custom metrics directly to Prometheus server in the monitoring VPC
 - Enables application-specific monitoring and custom alerting
 - Grafana provides visualization and dashboard capabilities
 
@@ -114,6 +113,6 @@ This architecture pattern is ideal for organizations that:
 
 ## Conclusion
 
-The VPC peering hub-and-spoke pattern provides an elegant solution for centralized monitoring while maintaining environment isolation. By combining AWS CloudWatch integration with custom Prometheus metrics, this architecture delivers comprehensive observability across all environments through a single, secure monitoring platform.
+The VPC peering hub-and-spoke pattern provides an elegant solution for centralized monitoring while maintaining environment isolation. By combining AWS CloudWatch integration with Prometheus and Grafana, this architecture delivers comprehensive observability across all environments through a single, secure monitoring platform.
 
 The pattern scales well as organizations grow, making it easy to add new environments or modify monitoring requirements without affecting the core infrastructure or compromising security boundaries.
