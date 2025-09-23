@@ -5,7 +5,7 @@
   "scripts": {
     "start": "next dev",
     "dev": "cross-env INIT_CWD=. next dev",
-    "build": "cross-env INIT_CWD=. next build && cross-env NODE_OPTIONS='--experimental-json-modules' node ./scripts/postbuild.mjs",
+    "build": "cross-env INIT_CWD=. next build",
     "serve": "next start",
     "analyze": "cross-env ANALYZE=true next build",
     "lint": "next lint --fix --dir pages --dir app --dir components --dir lib --dir layouts --dir scripts"
@@ -23,7 +23,7 @@
     "next": "14.0.3",
     "next-contentlayer": "0.3.4",
     "next-themes": "^0.2.1",
-    "pliny": "0.1.6",
+    "pliny": "^0.4.1",
     "postcss": "^8.4.24",
     "react": "18.2.0",
     "react-dom": "18.2.0",
@@ -46,7 +46,7 @@
     "@types/react": "^18.2.14",
     "@typescript-eslint/eslint-plugin": "^6.1.0",
     "@typescript-eslint/parser": "^6.1.0",
-    "cross-env": "^7.0.3",
+    "cross-env": "^10.0.0",
     "eslint": "^8.45.0",
     "eslint-config-next": "14.0.3",
     "eslint-config-prettier": "^8.8.0",
