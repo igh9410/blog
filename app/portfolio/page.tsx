@@ -17,7 +17,7 @@ export default function Portfolio() {
           </p>
         </div>
         <div className="container py-12">
-          <div className="-m-4 flex flex-wrap">
+          <div className="-m-4 flex flex-wrap md:-m-6">
             {projectsData.map((d) => (
               <Card
                 key={d.title}
