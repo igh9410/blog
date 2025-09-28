@@ -1,0 +1,30 @@
+---
+title: 'Building GitOps CI/CD Pipeline for Kustomize Application using GitHub Actions'
+date: '2025-09-28'
+lastmod: '2025-09-28'
+tags: ['Portfolio', 'GitHub Actions', 'CI/CD', 'ArgoCD', 'Kustomize', 'GitOps']
+draft: false
+summary: 'Building GitOps CI/CD Pipeline for Kustomize Application leveraging GitHub Actions Reusable workflow and Cross-repository GitOps pattern'
+---
+
+# Building GitOps CI/CD Pipeline for Kustomize Application using GitHub Actions
+
+In this blog post, I will demonstrate how I built a cross-repository GitOps CI/CD pipeline for Kustomize application leveraging GitHub Actions Reusable workflow and Cross-repository GitOps pattern.
+
+## Table of Contents
+
+1. Workflow Architecture and Design
+   - Reusable workflow with workflow_call
+   - Cross-repository GitOps pattern
+   - GitHub App authentication strategy
+2. Implementation Details
+   - Dynamic Kustomize configuration updates
+   - Multi-environment support with overlays
+   - Automated git operations and commits
+3. Common Issues and Solutions
+   - yq version compatibility across environments
+   - Authentication and permission troubleshooting
+   - Git configuration for automated commits
+4. Integration and Usage
+   - Calling from application repositories
+   - ArgoCD synchronization workflow
