@@ -1,22 +1,22 @@
 ---
-title: 'AI-Driven K3s Upgrade Retrospective: How I Achieved Near-Zero Downtime with GitOps + SUC'
+title: 'K3s Upgrade Retrospective: I Drove HA and Application Near-Zero Downtime by Leveraging AI for Planning'
 date: 2026-03-02
 lastmod: '2026-03-02'
 tags: ['Kubernetes', 'K3s', 'GitOps', 'System Upgrade Controller']
 draft: false
-summary: 'A detailed retrospective on upgrading a K3s cluster using GitOps and Rancher System Upgrade Controller, achieving near-zero downtime for production workloads.'
+summary: 'A retrospective on AI-assisted planning and operator-led K3s upgrade execution, achieving near-zero application downtime with expected brief CNPG primary switchover windows.'
 ---
 
-# K3s Upgrade with GitOps + System Upgrade Controller Using Codex
+# K3s Upgrade with GitOps + SUC: Zero Downtime (except Postgres database switchover)
 
 ## TL;DR
 
 - K3s cluster version upgrade: `v1.33.5+k3s1` -> `v1.34.4+k3s1`
-- By leveraging Codex, the whole upgrade and testing process took about three hours, including pre-upgrade prep, execution, and post-upgrade validation in five nodes cluster.
-- No downtime was detected for `dev`/`prod` applications during the cluster upgrade windows.
-- Technically, a true zero-downtime upgrade for Postgres workloads was not possible, but impact can be mitigated at the application level with proper retry and connection pool settings.
-- CNPG database failover by deleting the primary pod took about `11s` for the primary promotion window, while manual switchover with `kubectl cnpg promote ...` reduced switchover to less than `4s`.
-- While Codex handled the full upgrade workflow end-to-end, I could have improved the process by reviewing the official CNPG controller documentation first before prompting.
+- By leveraging Codex, the whole upgrade and testing process took about three hours, including pre-upgrade prep, execution, and post-upgrade validation in a five-node cluster.
+- No downtime signal was detected for `dev`/`prod` applications during K3s node upgrade waves.
+- Brief, expected interruption occurred only during CNPG primary switchover (`~11s` when failing over by deleting primary pod, `<4s` with manual `kubectl cnpg promote`).
+- This DB interruption comes from PostgreSQL primary role transition behavior, not from the K3s upgrade mechanics themselves.
+- I leveraged Codex for upgrade-phase planning and current-cluster diagnostics, then I personally reviewed the generated plan, made HA decisions, and executed/validated the upgrade.
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ summary: 'A detailed retrospective on upgrading a K3s cluster using GitOps and R
 ## Why This Process Was Designed This Way
 
 This looked like a routine Kubernetes version upgrade, but it became a good test of whether the in-place upgrade process was actually reliable under stateful workloads.
-I was also curious to see how the AI-assisted upgrade design and execution would play out in a real cluster environment.
+I leveraged AI for phase planning and current-state diagnostics, while final HA decisions and execution were done by me using my own operational judgment.
 
 My homelab cluster runs:
 
@@ -270,8 +270,9 @@ All nodes ended on `v1.34.4+k3s1`:
 
 Observed downtime outcome:
 
-- Confirmed brief app-visible interruption only in `dev/gramnuri-api` during the dev DB failover drill
-- No production app-visible downtime detected in measured failover and upgrade windows
+- No app-visible downtime signal was observed in `dev`/`prod` during K3s node upgrade waves.
+- Brief interruption was observed only in `dev/gramnuri-api` during a DB primary switchover drill.
+- This switchover window is an expected PostgreSQL/CNPG role-transition behavior, not a K3s upgrade-side outage.
 
 One caveat:
 
@@ -318,16 +319,16 @@ One caveat:
 
 ---
 
-# K3s 업그레이드 회고: GitOps + SUC + Codex로 진행
+# GitOps + SUC 활용한 K3s 클러스터 무중단 업그레이드 (데이터베이스 primary switchover 구간 제외)
 
 ## TL;DR
 
 - K3s 클러스터 버전 업그레이드: `v1.33.5+k3s1` -> `v1.34.4+k3s1`
 - Codex로 사전 준비부터 실행, 사후 검증까지 진행했고, 5노드 기준 전체 업그레이드/테스트는 약 3시간 걸렸습니다.
-- 클러스터 업그레이드 구간에서 `dev`/`prod` 애플리케이션 다운타임은 관측되지 않았습니다.
-- Postgres 워크로드를 완전 무중단으로 올리기는 현실적으로 어려웠지만, 앱 쪽 retry/connection pool 설정으로 체감 영향을 줄일 수 있었습니다.
-- primary pod 삭제 기반 CNPG failover의 primary promotion 구간은 약 `11초`였고, `kubectl cnpg promote ...` 수동 switchover는 `4초 미만`이었습니다.
-- Codex가 end-to-end로 대부분 처리해줬지만, 프롬프트 전에 CNPG 공식 문서를 먼저 봤으면 업그레이드 플로우를 더 잘 짤 수 있었겠다는 아쉬움이 있습니다.
+- K3s 노드 업그레이드 웨이브 동안 `dev`/`prod` 애플리케이션 다운타임 신호는 관측되지 않았습니다.
+- 짧은 중단은 CNPG primary 전환 구간에서만 발생했습니다(삭제 failover 약 `11초`, 수동 `kubectl cnpg promote`는 `4초 미만`).
+- 이 중단은 K3s 업그레이드 자체가 아니라 PostgreSQL primary role 전환 특성에서 오는 현상입니다.
+- Codex는 업그레이드 단계 설계와 현재 클러스터 상태 진단에 특히 도움이 됐고, 생성된 플랜 검토/HA 판단/실행/검증은 제가 직접 했습니다.
 
 ## 목차
 
@@ -437,7 +438,7 @@ spec:
   version: v1.34.4+k3s1
 ```
 
-짧게 요약하면:
+요약하면:
 
 - 범위: `controlplane` + `node01`..`node04` 대상 SUC 업그레이드, `v1.34.4+k3s1` 고정
 - 플랜은 의도적으로 완전 자동이 아닌 라벨 게이트 방식을 사용.
@@ -585,8 +586,10 @@ handover 검증 후 `node03` 웨이브를 진행했습니다.
 
 다운타임 관점 결론:
 
-- 앱 레벨에서 명확히 보인 중단은 `dev/gramnuri-api` failover 구간의 짧은 오류뿐이었습니다
-- 프로덕션(`gramnuri`, `artskorner`)에서는 측정한 failover/업그레이드 구간에서 사용자 가시적 다운타임 신호가 없었습니다
+- K3s 노드 업그레이드 웨이브 동안 `dev`/`prod` 앱 레벨 다운타임 신호는 관측되지 않았습니다.
+- 앱 레벨에서 명확히 보인 짧은 중단은 `dev/gramnuri-api`의 DB primary 전환 드릴 구간뿐이었습니다.
+- 이 구간은 K3s 업그레이드 이슈가 아니라 PostgreSQL/CNPG role 전환 특성에 해당합니다.
+- 프로덕션(`gramnuri`, `artskorner`)에서는 측정한 failover/업그레이드 구간에서 사용자 가시적 다운타임 신호가 없었습니다.
 
 참고:
 
