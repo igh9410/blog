@@ -1,54 +1,171 @@
-# K3s Upgrade Retrospective: Moving to GitOps + SUC Without Production Downtime
+---
+title: 'AI-Driven k3s Upgrade Retrospective: How I Achieved Near-Zero Downtime with GitOps + SUC'
+date: 2026-03-02
+lastmod: '2026-03-02'
+tags: ['Kubernetes', 'k3s', 'GitOps', 'System Upgrade Controller']
+draft: false
+summary: 'A detailed retrospective on upgrading a K3s cluster using GitOps and Rancher System Upgrade Controller, achieving near-zero downtime for production workloads.'
+---
 
-Date: 2026-03-02  
-Cluster: `default`  
-Upgrade: `v1.33.5+k3s1` -> `v1.34.4+k3s1`  
-Languages: English + Korean (below)
+# k3s Upgrade with GiOps + System Upgrade Controller leveraging Codex
 
-This looked like a routine minor version bump, but it became a good test of whether our upgrade process was actually reliable under stateful workloads.
+## TL;DR
 
-Our cluster runs:
+- K3s cluster version upgrade: `v1.33.5+k3s1` -> `v1.34.4+k3s1`
+- No downtime was detected for `dev`/`prod` applications during the cluster upgrade windows.
+- Technically, zero-downtime upgrade of Postgres workloads was impossible, but can be mitigated in application level with proper retrying and connection pool settings.
+- CNPG database failover in `dev` took about `11s` for the primary promotion window.
+- With manual switchover using `kubectl cnpg promote ...`, primary switchover took less than `4s`.
+
+## Table of Contents
+
+1. Why This Process Was Designed This Way
+2. Upgrade Plan Details
+3. Execution Timeline (UTC, 2026-03-02)
+4. Final Result
+5. What I’d Keep for Future Upgrades
+6. Raw Evidence Files
+
+## Why This Process Was Designed This Way
+
+This looked like a routine Kubernetes version upgrade, but it became a good test of whether my upgrade process was actually reliable under stateful workloads.
+Also, I was curious to see how the AI-assisted upgrade design and execution would play out in a real cluster environment.
+
+My cluster runs:
 
 - 1 control-plane node + 4 worker nodes
-- ArgoCD-managed applications (`dev`, `prod`)
+- ArgoCD-managed applications (`dev`, `prod`) and observability stack including Prometheus, Grafana and Loki
 - CloudNativePG (CNPG) clusters
 - `local-path` storage, which makes node-level behavior important during drains and failovers
 
 The goal was clear: upgrade every node while avoiding user-visible production downtime.
 
-## Why This Process Was Designed This Way
-
-This was my first in-place upgrade for this stack.  
+This was my first in-place upgrade for Kubernetes cluster.  
 Most of my production upgrade experience was blue-green on EKS, where cutover and rollback mechanics are different from in-place node waves.
+But since this was my on-premise homelab cluster, blue-green was not an option.
 
+I could have done a more manual process by sshing to each node and upgrading k3s directly, but that would have been more error-prone and less auditable.
 Because of that, I designed this upgrade around Rancher System Upgrade Controller (SUC), managed through GitOps, with strict guardrails.
 
 Key decisions:
 
-- Pinned version in Git: `v1.34.4+k3s1`
-- `concurrency: 1` and `cordon: true` for both `server-plan` and `agent-plan`
+- Pinned version in Git: `v1.34.4+k3s1` to avoid automatic upgrades when the new version is released
+- `concurrency: 1` and `cordon: true` for both `server-plan` and `agent-plan` so that only one node is upgraded at a time and it is cordoned during the process
 - Label gate for control-plane: `upgrade-server=active`
 - Label gate for workers: `upgrade-wave=active`
 
-This gave us controlled rollout waves, explicit checkpoints, and a clear audit trail.
+This gave me controlled rollout waves, explicit checkpoints, and a clear audit trail.
 
-Reference:
+## Upgrade plan details:
 
-- `infrastructure/system-upgrade-controller/plans.yaml`
-- `docs/k3s-system-upgrade-controller-upgrade-plan.md`
+`infrastructure/system-upgrade-controller/plans.yaml`:
+
+```yaml
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: server-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  tolerations:
+    # Required for clusters where control-plane nodes are tainted NoSchedule.
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    # Backward compatibility for clusters still using master taint.
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+  nodeSelector:
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+      # Manually trigger master upgrade by labeling the control-plane node:
+      # kubectl label node <control-plane-node> upgrade-server=active --overwrite
+      - key: upgrade-server
+        operator: In
+        values:
+          - active
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  version: v1.34.4+k3s1
+---
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: agent-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: DoesNotExist
+      # Upgrade exactly one worker at a time by labeling a single node:
+      # kubectl label node <node> upgrade-wave=active --overwrite
+      - key: upgrade-wave
+        operator: In
+        values:
+          - active
+  prepare:
+    image: rancher/k3s-upgrade
+    args:
+      - prepare
+      - server-plan
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  version: v1.34.4+k3s1
+```
+
+Brief summary:
+
+- Scope: SUC-based upgrade on `controlplane` + `node01`..`node04`, pinned to `v1.34.4+k3s1`.
+- Plans are intentionally label-gated (not fully automatic):
+  - `server-plan`: `concurrency: 1`, `cordon: true`, control-plane taint tolerations, trigger label `upgrade-server=active`
+  - `agent-plan`: `concurrency: 1`, `cordon: true`, `prepare: server-plan`, trigger label `upgrade-wave=active`
+- Rollout flow:
+  1. Sync ArgoCD `system-upgrade-controller` and verify plans/jobs.
+  2. Label control-plane (`upgrade-server=active`), monitor completion, remove label.
+  3. Upgrade workers one by one in order: `node02` -> `node04` -> `node01` -> `node03`.
+  4. For each worker: add label, monitor, then remove label.
+- Health checks after each wave: app pods, CNPG cluster readiness/primary state, and prod sync replication state.
+- Downtime verification approach: run continuous app probes during all waves and confirm no failed checks.
+- Completion criteria: all nodes on `v1.34.4+k3s1`, `Ready`, workloads healthy, CNPG clusters fully ready.
+- Detailed measured impact: `docs/k3s-failover-impact-report.md`
+
+Quick command references:
+
+```bash
+kubectl -n system-upgrade get plans -o wide
+kubectl label node controlplane upgrade-server=active --overwrite
+kubectl label node controlplane upgrade-server-
+kubectl label node <worker-node> upgrade-wave=active --overwrite
+kubectl label node <worker-node> upgrade-wave-
+```
 
 ## Preflight Work That Actually Made the Difference
 
-Before touching node versions, we focused on availability posture:
+Before touching node versions, I focused on availability posture:
 
-- Added PDBs (`minAvailable: 1`) for `gramnuri-api`, `gramnuri-web`, and `artskorner-api`
+- Added PDBs (`minAvailable: 1`) for my applications in dev, prod namespaces.
 - Increased `dev` app replicas to 2
 - Added anti-affinity/topology spread by hostname
 - Fixed CNPG topology key to `kubernetes.io/hostname`
 - Aligned WAL storage class and production sync replication settings
+- Ensured all database pods were running on different nodes for better failover behavior
 
-On a cluster with `local-path`, this prep is not optional. It directly reduces upgrade blast radius.
+Initially, one of my CNPG replicas was placed on the same node, so I deleted that replica and let CNPG recreate it on a different node to improve HA placement.
 
+This matters more with `local-path` storage: the underlying PV is node-local and tied to the original node via volume node affinity.  
+If a database pod is recreated on another node but still references the old PVC/PV, it cannot mount that volume because the data path physically exists on the previous node.
+So even though CNPG does not use StatefulSet and uses its own CRDs, it still relies on Kubernetes PVC/PV primitives, and the same node-local storage limitation applies.
+
+On a cluster with `local-path`, this prep is not optional.
 Reference:
 
 - `docs/k3s-upgrade-progress-summary.md`
@@ -58,13 +175,13 @@ Reference:
 
 ### 1) Control-plane wave
 
-We triggered the control-plane plan first via node label.
+I triggered the control-plane plan first via node label.
 
 What went wrong:
 
 - `apply-server-plan` stayed `Pending` because the plan did not fully match control-plane taints.
 
-How we fixed it:
+How I fixed it:
 
 - Added/verified toleration: `node-role.kubernetes.io/control-plane`
 - Added/verified toleration: `node-role.kubernetes.io/master`
@@ -97,7 +214,7 @@ Reference:
 
 ### 3) CNPG primary handover drills before `node03`
 
-Before the final worker wave, we intentionally triggered DB primary handovers to measure risk in advance.
+Before the final worker wave, I intentionally triggered DB primary handovers to measure risk in advance.
 
 `dev-gramnuri-db-cluster`
 
@@ -198,10 +315,17 @@ One caveat:
 업그레이드: `v1.33.5+k3s1` -> `v1.34.4+k3s1`  
 영문 버전: 위 섹션
 
-처음에는 단순한 마이너 업그레이드처럼 보였습니다.  
-하지만 실제로는, 상태 저장 워크로드가 있는 환경에서 업그레이드 절차 자체가 얼마나 신뢰할 수 있는지 검증하는 작업이었습니다.
+## TL;DR
 
-이번 클러스터 환경은 다음과 같습니다.
+- 이 작업은 제 homelab 클러스터에서 진행했습니다.
+- 클러스터 업그레이드 구간에서 `dev`/`prod` 애플리케이션 다운타임은 관측되지 않았습니다.
+- `dev` 환경 CNPG 데이터베이스 failover의 primary promotion 구간은 약 `11초`였습니다.
+- `kubectl cnpg promote ...`로 수동 switchover를 수행했을 때는 `4초 미만`으로 전환되었습니다.
+
+처음에는 단순한 마이너 업그레이드처럼 보였습니다.  
+하지만 실제로는, 상태 저장 워크로드가 있는 환경에서 제 업그레이드 절차 자체가 얼마나 신뢰할 수 있는지 검증하는 작업이었습니다.
+
+제가 운영한 클러스터 환경은 다음과 같습니다.
 
 - 컨트롤 플레인 1대 + 워커 4대
 - ArgoCD로 운영 중인 앱(`dev`, `prod`)
@@ -235,7 +359,7 @@ One caveat:
 
 ## 사전 작업에서 승부가 났다
 
-노드 버전을 올리기 전에 가용성 자세를 먼저 정리했습니다.
+노드 버전을 올리기 전에 제가 가용성 자세를 먼저 정리했습니다.
 
 - `gramnuri-api`, `gramnuri-web`, `artskorner-api`에 PDB(`minAvailable: 1`) 추가
 - `dev` 앱 replicas 2로 상향
@@ -255,7 +379,7 @@ One caveat:
 
 ### 1) 컨트롤 플레인 웨이브
 
-라벨로 컨트롤 플레인 플랜을 먼저 트리거했습니다.
+제가 라벨로 컨트롤 플레인 플랜을 먼저 트리거했습니다.
 
 문제:
 
@@ -295,7 +419,7 @@ One caveat:
 
 ### 3) `node03` 전 DB Primary Handover 드릴
 
-마지막 워커(`node03`) 업그레이드 전에 CNPG primary handover를 의도적으로 실행해 리스크를 먼저 측정했습니다.
+마지막 워커(`node03`) 업그레이드 전에 제가 CNPG primary handover를 의도적으로 실행해 리스크를 먼저 측정했습니다.
 
 `dev-gramnuri-db-cluster`
 
