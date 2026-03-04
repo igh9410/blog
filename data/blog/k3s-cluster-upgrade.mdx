@@ -1,64 +1,66 @@
 ---
-title: 'AI-Driven k3s Upgrade Retrospective: How I Achieved Near-Zero Downtime with GitOps + SUC'
+title: 'AI-Driven K3s Upgrade Retrospective: How I Achieved Near-Zero Downtime with GitOps + SUC'
 date: 2026-03-02
 lastmod: '2026-03-02'
-tags: ['Kubernetes', 'k3s', 'GitOps', 'System Upgrade Controller']
+tags: ['Kubernetes', 'K3s', 'GitOps', 'System Upgrade Controller']
 draft: false
 summary: 'A detailed retrospective on upgrading a K3s cluster using GitOps and Rancher System Upgrade Controller, achieving near-zero downtime for production workloads.'
 ---
 
-# k3s Upgrade with GiOps + System Upgrade Controller leveraging Codex
+# K3s Upgrade with GitOps + System Upgrade Controller Using Codex
 
 ## TL;DR
 
 - K3s cluster version upgrade: `v1.33.5+k3s1` -> `v1.34.4+k3s1`
+- By leveraging Codex, the whole upgrade and testing process took about three hours, including pre-upgrade prep, execution, and post-upgrade validation in five nodes cluster.
 - No downtime was detected for `dev`/`prod` applications during the cluster upgrade windows.
-- Technically, zero-downtime upgrade of Postgres workloads was impossible, but can be mitigated in application level with proper retrying and connection pool settings.
-- CNPG database failover in `dev` took about `11s` for the primary promotion window.
-- With manual switchover using `kubectl cnpg promote ...`, primary switchover took less than `4s`.
+- Technically, a true zero-downtime upgrade for Postgres workloads was not possible, but impact can be mitigated at the application level with proper retry and connection pool settings.
+- CNPG database failover by deleting the primary pod took about `11s` for the primary promotion window, while manual switchover with `kubectl cnpg promote ...` reduced switchover to less than `4s`.
+- While Codex handled the full upgrade workflow end-to-end, I could have improved the process by reviewing the official CNPG controller documentation first before prompting.
 
 ## Table of Contents
 
 1. Why This Process Was Designed This Way
 2. Upgrade Plan Details
-3. Execution Timeline (UTC, 2026-03-02)
-4. Final Result
-5. What I’d Keep for Future Upgrades
-6. Raw Evidence Files
+3. Preflight Work to Ensure HA During Upgrade
+4. Execution Timeline (UTC, 2026-03-02)
+5. Final Result
+6. What I’d Keep for Future Upgrades and What Could Be Improved
+7. Main Prompts I Used & Raw Evidence Files
 
 ## Why This Process Was Designed This Way
 
 This looked like a routine Kubernetes version upgrade, but it became a good test of whether my upgrade process was actually reliable under stateful workloads.
-Also, I was curious to see how the AI-assisted upgrade design and execution would play out in a real cluster environment.
+I was also curious to see how the AI-assisted upgrade design and execution would play out in a real cluster environment.
 
-My cluster runs:
+My homelab cluster runs:
 
 - 1 control-plane node + 4 worker nodes
-- ArgoCD-managed applications (`dev`, `prod`) and observability stack including Prometheus, Grafana and Loki
+- ArgoCD-managed applications (`dev`, `prod`) and an observability stack including Prometheus, Grafana, and Loki
 - CloudNativePG (CNPG) clusters
 - `local-path` storage, which makes node-level behavior important during drains and failovers
 
 The goal was clear: upgrade every node while avoiding user-visible production downtime.
 
-This was my first in-place upgrade for Kubernetes cluster.  
+This was my first in-place upgrade for a Kubernetes cluster.  
 Most of my production upgrade experience was blue-green on EKS, where cutover and rollback mechanics are different from in-place node waves.
-But since this was my on-premise homelab cluster, blue-green was not an option.
+But since this was my on-premises homelab cluster, blue-green was not an option.
 
-I could have done a more manual process by sshing to each node and upgrading k3s directly, but that would have been more error-prone and less auditable.
+I could have done a more manual process by SSHing into each node and upgrading K3s directly, but that would have been more error-prone and less auditable.
 Because of that, I designed this upgrade around Rancher System Upgrade Controller (SUC), managed through GitOps, with strict guardrails.
 
 Key decisions:
 
-- Pinned version in Git: `v1.34.4+k3s1` to avoid automatic upgrades when the new version is released
+- Pinned version in Git: `v1.34.4+k3s1` to avoid automatic upgrades when newer versions are released
 - `concurrency: 1` and `cordon: true` for both `server-plan` and `agent-plan` so that only one node is upgraded at a time and it is cordoned during the process
 - Label gate for control-plane: `upgrade-server=active`
 - Label gate for workers: `upgrade-wave=active`
 
 This gave me controlled rollout waves, explicit checkpoints, and a clear audit trail.
 
-## Upgrade plan details:
+## Upgrade Plan Details
 
-`infrastructure/system-upgrade-controller/plans.yaml`:
+[igh9410-infra/infrastructure/system-upgrade-controller/plans.yaml](https://github.com/igh9410/igh9410-infra/blob/main/infrastructure/system-upgrade-controller/plans.yaml):
 
 ```yaml
 apiVersion: upgrade.cattle.io/v1
@@ -122,7 +124,7 @@ spec:
   version: v1.34.4+k3s1
 ```
 
-Brief summary:
+Brief Summary:
 
 - Scope: SUC-based upgrade on `controlplane` + `node01`..`node04`, pinned to `v1.34.4+k3s1`.
 - Plans are intentionally label-gated (not fully automatic):
@@ -136,9 +138,9 @@ Brief summary:
 - Health checks after each wave: app pods, CNPG cluster readiness/primary state, and prod sync replication state.
 - Downtime verification approach: run continuous app probes during all waves and confirm no failed checks.
 - Completion criteria: all nodes on `v1.34.4+k3s1`, `Ready`, workloads healthy, CNPG clusters fully ready.
-- Detailed measured impact: `docs/k3s-failover-impact-report.md`
+- Detailed measured impact: [k3s-failover-impact-report.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-failover-impact-report.md)
 
-Quick command references:
+Quick Command References:
 
 ```bash
 kubectl -n system-upgrade get plans -o wide
@@ -148,11 +150,11 @@ kubectl label node <worker-node> upgrade-wave=active --overwrite
 kubectl label node <worker-node> upgrade-wave-
 ```
 
-## Preflight Work That Actually Made the Difference
+## Preflight Work to Ensure HA During Upgrade
 
-Before touching node versions, I focused on availability posture:
+Before upgrading worker nodes, I focused on availability posture:
 
-- Added PDBs (`minAvailable: 1`) for my applications in dev, prod namespaces.
+- Added PDBs (`minAvailable: 1`) for my applications in the `dev` and `prod` namespaces.
 - Increased `dev` app replicas to 2
 - Added anti-affinity/topology spread by hostname
 - Fixed CNPG topology key to `kubernetes.io/hostname`
@@ -160,16 +162,8 @@ Before touching node versions, I focused on availability posture:
 - Ensured all database pods were running on different nodes for better failover behavior
 
 Initially, one of my CNPG replicas was placed on the same node, so I deleted that replica and let CNPG recreate it on a different node to improve HA placement.
-
 This matters more with `local-path` storage: the underlying PV is node-local and tied to the original node via volume node affinity.  
-If a database pod is recreated on another node but still references the old PVC/PV, it cannot mount that volume because the data path physically exists on the previous node.
-So even though CNPG does not use StatefulSet and uses its own CRDs, it still relies on Kubernetes PVC/PV primitives, and the same node-local storage limitation applies.
-
-On a cluster with `local-path`, this prep is not optional.
-Reference:
-
-- `docs/k3s-upgrade-progress-summary.md`
-- `docs/retrospective/commands-00-baseline-and-downtime-verification.md`
+With `local-path`, CNPG (even though it uses CRDs instead of StatefulSets) still depends on node-local PVC/PV data, so a pod recreated on another node cannot mount the old volume.
 
 ## Execution Timeline (UTC, 2026-03-02)
 
@@ -179,7 +173,7 @@ I triggered the control-plane plan first via node label.
 
 What went wrong:
 
-- `apply-server-plan` stayed `Pending` because the plan did not fully match control-plane taints.
+- `apply-server-plan` stayed `Pending` because the plan did not have tolerations for the control-plane taints.
 
 How I fixed it:
 
@@ -193,14 +187,14 @@ Result:
 
 Reference:
 
-- `docs/retrospective/commands-01-master-wave-troubleshooting.md`
+- [igh9410-infra/docs/retrospective/commands-01-master-wave-troubleshooting.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-01-master-wave-troubleshooting.md)
 
 ### 2) Worker waves: `node02` -> `node04` -> `node01`
 
 For each worker:
 
 - Add `upgrade-wave=active`
-- Watch SUC jobs/pods + node readiness/version
+- Watch SUC jobs/pods and node readiness/version
 - Remove label
 - Re-check app and DB health before next wave
 
@@ -208,9 +202,9 @@ All three workers upgraded successfully to `v1.34.4+k3s1`.
 
 Reference:
 
-- `docs/retrospective/commands-02-worker-node02-wave.md`
-- `docs/retrospective/commands-04-worker-node04-wave.md`
-- `docs/retrospective/commands-05-worker-node01-wave.md`
+- [igh9410-infra/docs/retrospective/commands-02-worker-node02-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-02-worker-node02-wave.md)
+- [igh9410-infra/docs/retrospective/commands-04-worker-node04-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-04-worker-node04-wave.md)
+- [igh9410-infra/docs/retrospective/commands-05-worker-node01-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-05-worker-node01-wave.md)
 
 ### 3) CNPG primary handover drills before `node03`
 
@@ -240,11 +234,11 @@ Before the final worker wave, I intentionally triggered DB primary handovers to 
 
 Reference:
 
-- `docs/retrospective/commands-06-dev-primary-handover-before-node03.md`
-- `docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md`
-- `docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md`
-- `docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md`
-- `docs/k3s-failover-impact-report.md`
+- [igh9410-infra/docs/retrospective/commands-06-dev-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-06-dev-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md)
+- [k3s-failover-impact-report.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-failover-impact-report.md)
 
 ### 4) Final worker wave: `node03`
 
@@ -262,7 +256,7 @@ Observed during this wave (`prod-gramnuri` focus):
 
 Reference:
 
-- `docs/retrospective/commands-09-worker-node03-wave.md`
+- [igh9410-infra/docs/retrospective/commands-09-worker-node03-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-09-worker-node03-wave.md)
 
 ## Final Result
 
@@ -283,7 +277,9 @@ One caveat:
 
 - This conclusion is based on observed logs/events and probe traffic. Strong evidence, but still traffic-dependent.
 
-## What I’d Keep for Future Upgrades
+## What I’d Keep for Future Upgrades and What Could Be Improved
+
+### Things I’d Keep
 
 - Keep upgrades label-gated and wave-based
 - Keep versions pinned in Git
@@ -291,20 +287,34 @@ One caveat:
 - Keep between-wave health checkpoints mandatory
 - Keep command-level evidence logs for every maintenance event
 
-## Raw Evidence Files
+### Things I Could Improve
 
-- `commands-00-baseline-and-downtime-verification.md`
-- `commands-01-master-wave-troubleshooting.md`
-- `commands-02-worker-node02-wave.md`
-- `commands-03-gitops-repo-and-docs.md`
-- `commands-04-worker-node04-wave.md`
-- `commands-05-worker-node01-wave.md`
-- `commands-06-dev-primary-handover-before-node03.md`
-- `commands-07-prod-artskorner-primary-handover-before-node03.md`
-- `commands-08-prod-gramnuri-primary-handover-before-node03.md`
-- `commands-10-prod-gramnuri-node04-switchover.md`
-- `commands-09-worker-node03-wave.md`
-- `../k3s-failover-impact-report.md`
+- Postgres primary switchover could be handled with a manual `kubectl cnpg promote` command instead of deleting the primary pod
+- Application-level database connection settings, such as retry and connection pool settings, could be optimized
+- To simulate Postgres failover impact more accurately, I would create a test API endpoint that executes a write query to the database and run load tests against that endpoint during the db failover window
+
+## Main Prompts I Used & Raw Evidence Files
+
+### Main Prompts I Used:
+
+- I'm planning to perform on-premise k3s cluster upgrade from v1.33 to v.134 now. There's some Go backend apis and Postgres dbs running using the CloudNativePG. Since this is my homelab, the interruption is acceptable but I want to do it without downtime to simulate the real-world production environment. Help me plan the K8S cluster upgrade. This cluster has single master node, four worker nodes. You can use the kubectl or whatever tools necessary. The context is default. And I want to document the upgrade steps step by step like in Markdown file
+- The Applications are deployed using ArgoCD.Inspect the apps directory, include PDB or increase replicas and other necessary stuff using GitOps principle. I will do the sync when it's pushed to main branch
+- I don't want to do the manual upgrade but Rancher's System Upgrade Controller. I will install it via ArgoCD. kubectl apply -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/crd.yaml -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/system-upgrade-controller.yaml Do not apply that command but get that crd.yaml and save it into argocd/infra-apps Application and save that crd.yaml and system-upgrade-controller.yaml in infrastructure/system-upgrade-controller, make sure that ArgoCD Application for those resources are created under argocd/infra-apps directory
+
+### Raw Evidence Files:
+
+- [igh9410-infra/docs/retrospective/commands-00-baseline-and-downtime-verification.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-00-baseline-and-downtime-verification.md)
+- [igh9410-infra/docs/retrospective/commands-01-master-wave-troubleshooting.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-01-master-wave-troubleshooting.md)
+- [igh9410-infra/docs/retrospective/commands-02-worker-node02-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-02-worker-node02-wave.md)
+- [igh9410-infra/docs/retrospective/commands-03-gitops-repo-and-docs.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-03-gitops-repo-and-docs.md)
+- [igh9410-infra/docs/retrospective/commands-04-worker-node04-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-04-worker-node04-wave.md)
+- [igh9410-infra/docs/retrospective/commands-05-worker-node01-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-05-worker-node01-wave.md)
+- [igh9410-infra/docs/retrospective/commands-06-dev-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-06-dev-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md)
+- [igh9410-infra/docs/retrospective/commands-09-worker-node03-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-09-worker-node03-wave.md)
+- [igh9410-infra/docs/k3s-failover-impact-report.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-failover-impact-report.md)
 
 ---
 
@@ -354,8 +364,8 @@ One caveat:
 
 참고:
 
-- `infrastructure/system-upgrade-controller/plans.yaml`
-- `docs/k3s-system-upgrade-controller-upgrade-plan.md`
+- [igh9410-infra/infrastructure/system-upgrade-controller/plans.yaml](https://github.com/igh9410/igh9410-infra/blob/main/infrastructure/system-upgrade-controller/plans.yaml)
+- [igh9410-infra/docs/k3s-system-upgrade-controller-upgrade-plan.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-system-upgrade-controller-upgrade-plan.md)
 
 ## 사전 작업에서 승부가 났다
 
@@ -372,8 +382,8 @@ One caveat:
 
 참고:
 
-- `docs/k3s-upgrade-progress-summary.md`
-- `docs/retrospective/commands-00-baseline-and-downtime-verification.md`
+- [igh9410-infra/docs/k3s-upgrade-progress-summary.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-upgrade-progress-summary.md)
+- [igh9410-infra/docs/retrospective/commands-00-baseline-and-downtime-verification.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-00-baseline-and-downtime-verification.md)
 
 ## 실행 타임라인 (UTC, 2026-03-02)
 
@@ -398,7 +408,7 @@ One caveat:
 
 참고:
 
-- `docs/retrospective/commands-01-master-wave-troubleshooting.md`
+- [igh9410-infra/docs/retrospective/commands-01-master-wave-troubleshooting.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-01-master-wave-troubleshooting.md)
 
 ### 2) 워커 웨이브: `node02` -> `node04` -> `node01`
 
@@ -413,9 +423,9 @@ One caveat:
 
 참고:
 
-- `docs/retrospective/commands-02-worker-node02-wave.md`
-- `docs/retrospective/commands-04-worker-node04-wave.md`
-- `docs/retrospective/commands-05-worker-node01-wave.md`
+- [igh9410-infra/docs/retrospective/commands-02-worker-node02-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-02-worker-node02-wave.md)
+- [igh9410-infra/docs/retrospective/commands-04-worker-node04-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-04-worker-node04-wave.md)
+- [igh9410-infra/docs/retrospective/commands-05-worker-node01-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-05-worker-node01-wave.md)
 
 ### 3) `node03` 전 DB Primary Handover 드릴
 
@@ -445,11 +455,11 @@ One caveat:
 
 참고:
 
-- `docs/retrospective/commands-06-dev-primary-handover-before-node03.md`
-- `docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md`
-- `docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md`
-- `docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md`
-- `docs/k3s-failover-impact-report.md`
+- [igh9410-infra/docs/retrospective/commands-06-dev-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-06-dev-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md)
+- [k3s-failover-impact-report.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-failover-impact-report.md)
 
 ### 4) 최종 워커 웨이브: `node03`
 
@@ -467,7 +477,7 @@ handover 검증 이후 `node03` 웨이브를 실행했습니다.
 
 참고:
 
-- `docs/retrospective/commands-09-worker-node03-wave.md`
+- [igh9410-infra/docs/retrospective/commands-09-worker-node03-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-09-worker-node03-wave.md)
 
 ## 최종 결과
 
@@ -499,15 +509,15 @@ handover 검증 이후 `node03` 웨이브를 실행했습니다.
 
 ## 원본 증적 파일
 
-- `commands-00-baseline-and-downtime-verification.md`
-- `commands-01-master-wave-troubleshooting.md`
-- `commands-02-worker-node02-wave.md`
-- `commands-03-gitops-repo-and-docs.md`
-- `commands-04-worker-node04-wave.md`
-- `commands-05-worker-node01-wave.md`
-- `commands-06-dev-primary-handover-before-node03.md`
-- `commands-07-prod-artskorner-primary-handover-before-node03.md`
-- `commands-08-prod-gramnuri-primary-handover-before-node03.md`
-- `commands-10-prod-gramnuri-node04-switchover.md`
-- `commands-09-worker-node03-wave.md`
-- `../k3s-failover-impact-report.md`
+- [igh9410-infra/docs/retrospective/commands-00-baseline-and-downtime-verification.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-00-baseline-and-downtime-verification.md)
+- [igh9410-infra/docs/retrospective/commands-01-master-wave-troubleshooting.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-01-master-wave-troubleshooting.md)
+- [igh9410-infra/docs/retrospective/commands-02-worker-node02-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-02-worker-node02-wave.md)
+- [igh9410-infra/docs/retrospective/commands-03-gitops-repo-and-docs.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-03-gitops-repo-and-docs.md)
+- [igh9410-infra/docs/retrospective/commands-04-worker-node04-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-04-worker-node04-wave.md)
+- [igh9410-infra/docs/retrospective/commands-05-worker-node01-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-05-worker-node01-wave.md)
+- [igh9410-infra/docs/retrospective/commands-06-dev-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-06-dev-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-07-prod-artskorner-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md)
+- [igh9410-infra/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md)
+- [igh9410-infra/docs/retrospective/commands-09-worker-node03-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-09-worker-node03-wave.md)
+- [k3s-failover-impact-report.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-failover-impact-report.md)
