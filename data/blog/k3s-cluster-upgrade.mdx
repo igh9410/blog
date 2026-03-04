@@ -30,7 +30,7 @@ summary: 'A detailed retrospective on upgrading a K3s cluster using GitOps and R
 
 ## Why This Process Was Designed This Way
 
-This looked like a routine Kubernetes version upgrade, but it became a good test of whether my upgrade process was actually reliable under stateful workloads.
+This looked like a routine Kubernetes version upgrade, but it became a good test of whether the in-place upgrade process was actually reliable under stateful workloads.
 I was also curious to see how the AI-assisted upgrade design and execution would play out in a real cluster environment.
 
 My homelab cluster runs:
@@ -318,88 +318,182 @@ One caveat:
 
 ---
 
-# K3s 업그레이드 회고: GitOps + SUC로 프로덕션 무중단에 가깝게 진행한 방법
-
-일자: 2026-03-02  
-클러스터: `default`  
-업그레이드: `v1.33.5+k3s1` -> `v1.34.4+k3s1`  
-영문 버전: 위 섹션
+# K3s 업그레이드 회고: GitOps + SUC + Codex로 진행
 
 ## TL;DR
 
-- 이 작업은 제 homelab 클러스터에서 진행했습니다.
+- K3s 클러스터 버전 업그레이드: `v1.33.5+k3s1` -> `v1.34.4+k3s1`
+- Codex로 사전 준비부터 실행, 사후 검증까지 진행했고, 5노드 기준 전체 업그레이드/테스트는 약 3시간 걸렸습니다.
 - 클러스터 업그레이드 구간에서 `dev`/`prod` 애플리케이션 다운타임은 관측되지 않았습니다.
-- `dev` 환경 CNPG 데이터베이스 failover의 primary promotion 구간은 약 `11초`였습니다.
-- `kubectl cnpg promote ...`로 수동 switchover를 수행했을 때는 `4초 미만`으로 전환되었습니다.
+- Postgres 워크로드를 완전 무중단으로 올리기는 현실적으로 어려웠지만, 앱 쪽 retry/connection pool 설정으로 체감 영향을 줄일 수 있었습니다.
+- primary pod 삭제 기반 CNPG failover의 primary promotion 구간은 약 `11초`였고, `kubectl cnpg promote ...` 수동 switchover는 `4초 미만`이었습니다.
+- Codex가 end-to-end로 대부분 처리해줬지만, 프롬프트 전에 CNPG 공식 문서를 먼저 봤으면 업그레이드 플로우를 더 잘 짤 수 있었겠다는 아쉬움이 있습니다.
 
-처음에는 단순한 마이너 업그레이드처럼 보였습니다.  
-하지만 실제로는, 상태 저장 워크로드가 있는 환경에서 제 업그레이드 절차 자체가 얼마나 신뢰할 수 있는지 검증하는 작업이었습니다.
+## 목차
 
-제가 운영한 클러스터 환경은 다음과 같습니다.
+1. 왜 절차를 이렇게 설계했는가
+2. 업그레이드 플랜 상세
+3. 업그레이드 중 HA 확보를 위한 사전 작업
+4. 실행 타임라인 (UTC, 2026-03-02)
+5. 최종 결과
+6. 다음 업그레이드에서 유지할 점 / 개선할 점
+7. 주요 프롬프트와 원본 증적 파일
+
+## 왜 절차를 이렇게 설계했는가
+
+처음엔 쿠버네티스 마이너 버전 올리는 작업처럼 보였는데, 변수는 상태 저장 워크로드에서 인플레이스 업그레이드 방식이 얼마나 안전하게 작동하는지 검증해볼 기회였습니다.
+AI 보조로 설계/실행했을 때 실제 클러스터에서 어디까지 잘 먹히는지도 궁금했습니다.
+
+제 홈랩 클러스터는 이렇게 구성돼있습니다.
 
 - 컨트롤 플레인 1대 + 워커 4대
-- ArgoCD로 운영 중인 앱(`dev`, `prod`)
-- CloudNativePG(CNPG) 데이터베이스 클러스터
-- `local-path` 스토리지(노드 배치/드레인 시 영향이 큼)
+- ArgoCD로 운영 중인 앱(`dev`, `prod`) + Prometheus/Grafana/Loki 관측 스택
+- CloudNativePG (CNPG) 클러스터
+- `local-path` 스토리지(드레인/장애조치 시 노드 배치 영향이 큼)
 
-목표는 명확했습니다.  
-모든 노드를 업그레이드하되, 프로덕션에서 사용자 체감 다운타임을 만들지 않는 것.
+목표는 분명했습니다.  
+모든 노드를 버전업 하되, 사용자 입장에서 보이는 프로덕션 다운타임은 없게 만드는 것.
 
-## 왜 이번 절차를 이렇게 설계했는가
+이번이 제 첫 in-place Kubernetes 업그레이드였습니다.  
+기존 프로덕션 업그레이드 경험은 EKS 기반 blue-green이 중심이었고, 이 방식은 in-place 업그레이드와 위험 지점이 다릅니다.
+그리고 이번 환경은 제 온프레미스 홈랩이라 blue-green은 현실적으로 선택하기 어려웠습니다.
 
-이번 작업은 이 스택에서 처음 진행한 in-place 업그레이드였습니다.  
-실제 프로덕션에서의 주요 업그레이드 경험은 EKS 기반 blue-green 방식이었고, 그 방식은 in-place 노드 웨이브와 위험 지점이 다릅니다.
+SSH로 각 노드에 직접 들어가 K3s를 수동 업그레이드할 수도 있었지만, 실수 가능성이 크고 이력 추적도 깔끔하지 않습니다.
+그래서 Rancher System Upgrade Controller(SUC)를 GitOps로 운영하는 방식으로 가져갔습니다.
 
-그래서 이번에는 Rancher System Upgrade Controller(SUC)를 GitOps로 운영하면서, 가드레일을 강하게 두는 방식으로 설계했습니다.
+핵심 포인트는 아래와 같습니다.
 
-핵심 설정은 다음과 같습니다.
-
-- 타겟 버전 고정: `v1.34.4+k3s1`
+- Git에서 타겟 버전 고정: `v1.34.4+k3s1`
 - `server-plan`, `agent-plan` 모두 `concurrency: 1`, `cordon: true`
 - 컨트롤 플레인 라벨 게이트: `upgrade-server=active`
-- 워커 웨이브 라벨 게이트: `upgrade-wave=active`
+- 워커 라벨 게이트: `upgrade-wave=active`
 
-결과적으로 업그레이드가 "한 번에 밀어넣는 작업"이 아니라,  
-웨이브 단위로 통제 가능한 운영 절차가 되었습니다.
+결국 업그레이드는 "한 번에 밀어넣기"가 아니라,  
+체크포인트가 있는 웨이브 운영 흐름으로 진행했습니다.
 
-참고:
+## 업그레이드 플랜 상세
 
-- [igh9410-infra/infrastructure/system-upgrade-controller/plans.yaml](https://github.com/igh9410/igh9410-infra/blob/main/infrastructure/system-upgrade-controller/plans.yaml)
-- [igh9410-infra/docs/k3s-system-upgrade-controller-upgrade-plan.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-system-upgrade-controller-upgrade-plan.md)
+[igh9410-infra/infrastructure/system-upgrade-controller/plans.yaml](https://github.com/igh9410/igh9410-infra/blob/main/infrastructure/system-upgrade-controller/plans.yaml):
 
-## 사전 작업에서 승부가 났다
+```yaml
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: server-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  tolerations:
+    # Required for clusters where control-plane nodes are tainted NoSchedule.
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    # Backward compatibility for clusters still using master taint.
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+  nodeSelector:
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+      # Manually trigger master upgrade by labeling the control-plane node:
+      # kubectl label node <control-plane-node> upgrade-server=active --overwrite
+      - key: upgrade-server
+        operator: In
+        values:
+          - active
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  version: v1.34.4+k3s1
+---
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: agent-plan
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: DoesNotExist
+      # Upgrade exactly one worker at a time by labeling a single node:
+      # kubectl label node <node> upgrade-wave=active --overwrite
+      - key: upgrade-wave
+        operator: In
+        values:
+          - active
+  prepare:
+    image: rancher/k3s-upgrade
+    args:
+      - prepare
+      - server-plan
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/k3s-upgrade
+  version: v1.34.4+k3s1
+```
 
-노드 버전을 올리기 전에 제가 가용성 자세를 먼저 정리했습니다.
+짧게 요약하면:
 
-- `gramnuri-api`, `gramnuri-web`, `artskorner-api`에 PDB(`minAvailable: 1`) 추가
+- 범위: `controlplane` + `node01`..`node04` 대상 SUC 업그레이드, `v1.34.4+k3s1` 고정
+- 플랜은 의도적으로 완전 자동이 아닌 라벨 게이트 방식을 사용.
+  - `server-plan`: `concurrency: 1`, `cordon: true`, control-plane taint toleration, `upgrade-server=active`
+  - `agent-plan`: `concurrency: 1`, `cordon: true`, `prepare: server-plan`, `upgrade-wave=active`
+- 롤아웃 흐름:
+  1. ArgoCD `system-upgrade-controller` 동기화 후 plan/job 확인
+  2. control-plane 라벨링(`upgrade-server=active`) -> 완료 모니터링 -> 라벨 제거
+  3. 워커를 `node02` -> `node04` -> `node01` -> `node03` 순으로 1대씩 진행
+  4. 각 워커마다 라벨 부여 -> 모니터링 -> 라벨 제거
+- 웨이브별 점검: 앱 pod, CNPG readiness/primary, prod sync replication
+- 다운타임 검증: 전 웨이브 동안 연속 probe로 실패 여부 확인
+- 완료 기준: 전 노드 `v1.34.4+k3s1`, `Ready`, 워크로드/DB 상태 정상
+- 상세 영향 리포트: [k3s-failover-impact-report.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-failover-impact-report.md)
+
+빠른 명령 참고:
+
+```bash
+kubectl -n system-upgrade get plans -o wide
+kubectl label node controlplane upgrade-server=active --overwrite
+kubectl label node controlplane upgrade-server-
+kubectl label node <worker-node> upgrade-wave=active --overwrite
+kubectl label node <worker-node> upgrade-wave-
+```
+
+## 업그레이드 중 HA 확보를 위한 사전 작업
+
+워커 노드를 올리기 전에, 가용성 관점에서 먼저 손봤습니다.
+
+- `dev`/`prod` 네임스페이스 애플리케이션에 PDB(`minAvailable: 1`) 적용
 - `dev` 앱 replicas 2로 상향
 - 호스트네임 기준 anti-affinity/topology spread 적용
 - CNPG topology key를 `kubernetes.io/hostname`으로 정리
 - WAL storage class 및 프로덕션 동기 복제 설정 정비
+- DB pod가 같은 노드에 몰리지 않게 분산 배치
 
-`local-path` 환경에서는 이런 사전 정리가 선택이 아니라 필수에 가깝습니다.  
-업그레이드 중 장애 전파 범위를 확실히 줄여줍니다.
-
-참고:
-
-- [igh9410-infra/docs/k3s-upgrade-progress-summary.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-upgrade-progress-summary.md)
-- [igh9410-infra/docs/retrospective/commands-00-baseline-and-downtime-verification.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-00-baseline-and-downtime-verification.md)
+초기엔 CNPG replica 하나가 같은 노드에 붙어 있어서, replica pod를 지우고 다른 노드로 다시 붙도록 유도했습니다.
+`local-path`는 PV가 노드 로컬 경로에 묶입니다. 그래서 기존 PVC/PV를 참조하는 pod가 다른 노드에 뜨면 이전 볼륨을 마운트할 수 없습니다.
+즉 CNPG가 StatefulSet 대신 CRD를 쓰더라도 PVC/PV 기반인 건 같아서 node-local 스토리지 제약이 그대로 걸립니다.
+따라서 `local-path` 환경에서는 이 사전 정리가 사실상 필수였습니다.
 
 ## 실행 타임라인 (UTC, 2026-03-02)
 
 ### 1) 컨트롤 플레인 웨이브
 
-제가 라벨로 컨트롤 플레인 플랜을 먼저 트리거했습니다.
+컨트롤 플레인 노드에 라벨을 붙여 먼저 웨이브를 시작했습니다.
 
 문제:
 
-- `apply-server-plan` 파드가 `Pending` 상태로 멈춤
-- 원인은 컨트롤 플레인 taint 허용(toleration) 불일치
+- `apply-server-plan`이 `Pending`에 머물렀습니다
+- 원인: 컨트롤 플레인 taint toleration 누락
 
 조치:
 
-- `node-role.kubernetes.io/control-plane` toleration 명시/확인
-- `node-role.kubernetes.io/master` toleration 명시/확인
+- `node-role.kubernetes.io/control-plane` toleration 추가/확인
+- `node-role.kubernetes.io/master` toleration 추가/확인
 - ArgoCD 재동기화 후 재진행
 
 결과:
@@ -412,14 +506,14 @@ One caveat:
 
 ### 2) 워커 웨이브: `node02` -> `node04` -> `node01`
 
-각 워커는 동일한 절차로 진행했습니다.
+각 워커는 같은 루틴으로 진행했습니다.
 
 - `upgrade-wave=active` 라벨 부여
-- SUC job/pod, 노드 버전/Ready 상태 모니터링
+- SUC jobs/pods 및 노드 readiness/version 모니터링
 - 완료 후 라벨 제거
-- 다음 웨이브 전에 앱/DB 상태 재검증
+- 다음 웨이브 전에 앱/DB 상태 다시 확인
 
-세 노드 모두 `v1.34.4+k3s1`로 정상 업그레이드되었습니다.
+세 워커 모두 `v1.34.4+k3s1`로 정상 업그레이드했습니다.
 
 참고:
 
@@ -427,15 +521,15 @@ One caveat:
 - [igh9410-infra/docs/retrospective/commands-04-worker-node04-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-04-worker-node04-wave.md)
 - [igh9410-infra/docs/retrospective/commands-05-worker-node01-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-05-worker-node01-wave.md)
 
-### 3) `node03` 전 DB Primary Handover 드릴
+### 3) `node03` 전 CNPG Primary Handover 드릴
 
-마지막 워커(`node03`) 업그레이드 전에 제가 CNPG primary handover를 의도적으로 실행해 리스크를 먼저 측정했습니다.
+마지막 워커(`node03`) 웨이브 전에 DB primary handover를 일부러 먼저 돌려서 리스크를 미리 체크했습니다.
 
 `dev-gramnuri-db-cluster`
 
 - 전체 failover 구간: 약 `3m27s`
 - primary promotion 구간: 약 `11.4s`
-- 앱 영향: `dev/gramnuri-api`에서 `500` 2건(약 `1.4s` 짧은 버스트)
+- 앱 영향: `dev/gramnuri-api`에서 `500` 2건(약 `1.4s` 버스트)
 
 `prod-artskorner-db-cluster`
 
@@ -445,12 +539,12 @@ One caveat:
 
 `prod-gramnuri-db-cluster`
 
-- 전체 failover 구간: 약 `3m13s` (기존 primary 종료 지연으로 길어짐)
+- 전체 failover 구간: 약 `3m13s` (기존 primary 종료 지연으로 증가)
 - promotion 구간: 약 `3.6s`
 - 앱 영향: 측정 구간 내 `500` 미관측
-- failover 중 POST 트래픽도 처리됨(`200` 및 `429` 1건)
+- failover 중 POST 트래픽 처리(`200`, `429` 1건)
 - 추가 planned switchover to `node04` (`2026-03-02T12:13:45Z`)
-- primary 선출 구간: 약 `3.8s` (`currentPrimaryTimestamp=2026-03-02T12:13:48.766Z`)
+- primary election 구간: 약 `3.8s` (`currentPrimaryTimestamp=2026-03-02T12:13:48.766Z`)
 - 클러스터 healthy 복귀까지: 약 `29s` (`2026-03-02T12:14:14Z`)
 
 참고:
@@ -463,17 +557,17 @@ One caveat:
 
 ### 4) 최종 워커 웨이브: `node03`
 
-handover 검증 이후 `node03` 웨이브를 실행했습니다.
+handover 검증 후 `node03` 웨이브를 진행했습니다.
 
 - SUC job 시작: `2026-03-02T10:37:25Z`
 - SUC job 종료: `2026-03-02T10:38:29Z`
 - 소요 시간: 약 `64s`
 
-이 구간(`prod-gramnuri` 중심)에서 관측한 내용:
+이 구간 관측 결과(`prod-gramnuri` 중심):
 
 - `prod/gramnuri-api`, `prod/gramnuri-web`에서 `500` 신호 없음
-- `prod-gramnuri-db-cluster` primary는 `node01`에 유지
-- 해당 구간에서 CNPG failover/recovery 이벤트 추가 발생 없음
+- `prod-gramnuri-db-cluster` primary는 `node01` 유지
+- 해당 구간 신규 CNPG failover/recovery 이벤트 없음
 
 참고:
 
@@ -489,25 +583,41 @@ handover 검증 이후 `node03` 웨이브를 실행했습니다.
 - `node03`
 - `node04`
 
-관측 기준 다운타임 결론:
+다운타임 관점 결론:
 
-- 앱 레벨에서 명확히 확인된 중단은 `dev/gramnuri-api`의 짧은 오류 구간뿐
-- 프로덕션(`gramnuri`, `artskorner`)은 측정한 failover/업그레이드 구간에서 사용자 가시적 다운타임 신호 미관측
+- 앱 레벨에서 명확히 보인 중단은 `dev/gramnuri-api` failover 구간의 짧은 오류뿐이었습니다
+- 프로덕션(`gramnuri`, `artskorner`)에서는 측정한 failover/업그레이드 구간에서 사용자 가시적 다운타임 신호가 없었습니다
 
-단서:
+참고:
 
-- 위 결론은 로그/이벤트/프로브 기반 관측 결과입니다.
-- 강한 근거이지만, 트래픽 패턴에 의존하는 성격은 남아 있습니다.
+- 위 결론은 로그/이벤트/프로브 관측 기반입니다
+- 근거는 충분히 강하지만 트래픽 패턴 의존성은 남아 있습니다
 
-## 다음 업그레이드에도 유지할 원칙
+## 다음 업그레이드에서 유지할 점 / 개선할 점
 
-- 라벨 게이트 + 웨이브 방식 유지
+### 유지할 점
+
+- 라벨 게이트 + 웨이브 기반 업그레이드 유지
 - 타겟 버전 Git 고정 유지
 - 고위험 웨이브 전 DB handover 드릴 유지
-- 웨이브 간 상태 검증을 필수 절차로 고정
-- 명령/증적 로그를 항상 남기는 운영 습관 유지
+- 웨이브 간 상태 검증 필수화
+- 명령/증적 로그 운영 습관 유지
 
-## 원본 증적 파일
+### 개선할 점
+
+- primary 삭제 방식 대신 수동 `kubectl cnpg promote` switchover를 우선 적용
+- 앱 레벨 DB retry/connection pool 설정 더 다듬기
+- failover 윈도우에 write 쿼리 테스트 API + 부하 테스트를 붙여 실측 정확도 올리기
+
+## 주요 프롬프트와 원본 증적 파일
+
+### 주요 프롬프트:
+
+- I'm planning to perform on-premise k3s cluster upgrade from v1.33 to v.134 now. There's some Go backend apis and Postgres dbs running using the CloudNativePG. Since this is my homelab, the interruption is acceptable but I want to do it without downtime to simulate the real-world production environment. Help me plan the K8S cluster upgrade. This cluster has single master node, four worker nodes. You can use the kubectl or whatever tools necessary. The context is default. And I want to document the upgrade steps step by step like in Markdown file
+- The Applications are deployed using ArgoCD.Inspect the apps directory, include PDB or increase replicas and other necessary stuff using GitOps principle. I will do the sync when it's pushed to main branch
+- I don't want to do the manual upgrade but Rancher's System Upgrade Controller. I will install it via ArgoCD. kubectl apply -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/crd.yaml -f https://github.com/rancher/system-upgrade-controller/releases/latest/download/system-upgrade-controller.yaml Do not apply that command but get that crd.yaml and save it into argocd/infra-apps Application and save that crd.yaml and system-upgrade-controller.yaml in infrastructure/system-upgrade-controller, make sure that ArgoCD Application for those resources are created under argocd/infra-apps directory
+
+### 원본 증적 파일:
 
 - [igh9410-infra/docs/retrospective/commands-00-baseline-and-downtime-verification.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-00-baseline-and-downtime-verification.md)
 - [igh9410-infra/docs/retrospective/commands-01-master-wave-troubleshooting.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-01-master-wave-troubleshooting.md)
@@ -520,4 +630,4 @@ handover 검증 이후 `node03` 웨이브를 실행했습니다.
 - [igh9410-infra/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-08-prod-gramnuri-primary-handover-before-node03.md)
 - [igh9410-infra/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-10-prod-gramnuri-node04-switchover.md)
 - [igh9410-infra/docs/retrospective/commands-09-worker-node03-wave.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/retrospective/commands-09-worker-node03-wave.md)
-- [k3s-failover-impact-report.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-failover-impact-report.md)
+- [igh9410-infra/docs/k3s-failover-impact-report.md](https://github.com/igh9410/igh9410-infra/blob/main/docs/k3s-failover-impact-report.md)
